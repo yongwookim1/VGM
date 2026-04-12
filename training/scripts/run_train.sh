@@ -53,6 +53,11 @@ cd "${REPO_ROOT}"
 export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
 export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1}
+export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-1}
+export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
+# Uncomment for verbose NCCL diagnostics:
+# export NCCL_DEBUG=INFO
+# export NCCL_DEBUG_SUBSYS=ALL
 
 echo "=============================================="
 echo "  SafeQwen2.5-VL Video Safety Fine-tuning"

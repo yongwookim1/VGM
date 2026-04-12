@@ -232,7 +232,7 @@ class VideoSafetyDataset(Dataset):
         }
         if pixel_values_videos is not None:
             result["pixel_values_videos"] = pixel_values_videos.squeeze(0) \
-                if pixel_values_videos.dim() > 2 else pixel_values_videos
+                if pixel_values_videos.dim() == 3 else pixel_values_videos
         if video_grid_thw is not None:
             result["video_grid_thw"] = video_grid_thw
 
