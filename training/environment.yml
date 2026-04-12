@@ -1,0 +1,38 @@
+name: holisafe
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pytorch=2.5.1
+  - torchvision=0.20.1
+  - torchaudio=2.5.1
+  - pytorch-cuda=12.1
+  - pip
+  - pip:
+    # Core training stack
+    # transformers >=4.46 required for stable Qwen2_5_VLForConditionalGeneration
+    - transformers>=4.46.0,<5.0.0
+    - peft>=0.13.0,<1.0.0
+    - accelerate>=1.0.0,<2.0.0
+    - deepspeed>=0.15.0,<1.0.0
+    # Qwen2.5-VL processor + video decoding
+    - qwen-vl-utils>=0.0.8
+    - av>=12.0.0
+    # Video frame extraction (OpenCV) and image handling
+    - opencv-python>=4.8.0
+    - numpy>=1.26.0
+    - Pillow>=10.0.0
+    # Logging
+    - tensorboard>=2.17.0
+    # Eval (Claude / GPT / Gemini judges)
+    - anthropic>=0.39.0
+    - openai>=1.50.0
+    - google-generativeai>=0.8.0
+    - tqdm>=4.66.0
+    - requests>=2.31.0
+    - aiohttp>=3.9.0
+    # Optional: flash-attention for Qwen2.5-VL memory efficiency
+    # Uncomment below if your CUDA toolkit matches (requires CUDA 12.x + gcc/g++)
+    # - flash-attn>=2.6.0
