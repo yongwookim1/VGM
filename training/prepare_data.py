@@ -189,6 +189,8 @@ def main():
         help="Languages to include: en, ko, or both",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--test_ratio", type=float, default=0.2,
+                        help="Fraction of data to hold out for testing (0 to skip split)")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -227,13 +229,27 @@ def main():
         for p in stats["missing_paths_sample"]:
             print(f"    {p}")
 
-    # Save
+    # Train/test split
     output_dir = os.path.dirname(args.output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
-    with open(args.output_path, "w") as f:
-        json.dump(all_samples, f, indent=2, ensure_ascii=False)
-    print(f"\nSaved {len(all_samples)} samples to {args.output_path}")
+
+    if args.test_ratio > 0:
+        split_idx = int(len(all_samples) * (1 - args.test_ratio))
+        train_samples = all_samples[:split_idx]
+        test_samples = all_samples[split_idx:]
+
+        test_path = args.output_path.replace("train_data", "test_data")
+        with open(args.output_path, "w") as f:
+            json.dump(train_samples, f, indent=2, ensure_ascii=False)
+        with open(test_path, "w") as f:
+            json.dump(test_samples, f, indent=2, ensure_ascii=False)
+        print(f"\nSaved {len(train_samples)} train samples to {args.output_path}")
+        print(f"Saved {len(test_samples)} test samples to {test_path}")
+    else:
+        with open(args.output_path, "w") as f:
+            json.dump(all_samples, f, indent=2, ensure_ascii=False)
+        print(f"\nSaved {len(all_samples)} samples to {args.output_path}")
 
 
 if __name__ == "__main__":
