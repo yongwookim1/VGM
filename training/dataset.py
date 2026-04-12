@@ -17,6 +17,27 @@ from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
 
+# Qwen2.5-VL patch size — dimensions must be multiples of this
+_PATCH_FACTOR = 28
+# Max pixels per frame: controls video token budget.
+# 256 * 28^2 ≈ 200K px/frame → ~256 video tokens total for 16 frames
+_MAX_VIDEO_PIXELS = 256 * _PATCH_FACTOR * _PATCH_FACTOR
+
+
+def _resize_frame(img: Image.Image, max_pixels: int = _MAX_VIDEO_PIXELS) -> Image.Image:
+    """Resize a PIL frame so total pixels <= max_pixels with dimensions
+    divisible by _PATCH_FACTOR. This ensures apply_chat_template and the
+    processor compute the same number of video tokens."""
+    w, h = img.size
+    if w * h > max_pixels:
+        scale = math.sqrt(max_pixels / (w * h))
+        w = max(_PATCH_FACTOR, int(w * scale / _PATCH_FACTOR) * _PATCH_FACTOR)
+        h = max(_PATCH_FACTOR, int(h * scale / _PATCH_FACTOR) * _PATCH_FACTOR)
+    else:
+        w = max(_PATCH_FACTOR, round(w / _PATCH_FACTOR) * _PATCH_FACTOR)
+        h = max(_PATCH_FACTOR, round(h / _PATCH_FACTOR) * _PATCH_FACTOR)
+    return img.resize((w, h), Image.BILINEAR)
+
 
 def sample_frames_from_video(video_path: str, max_frames: int = 16,
                              fps: float = 1.0) -> list[Image.Image]:
@@ -134,6 +155,10 @@ class VideoSafetyDataset(Dataset):
         except Exception as e:
             logger.warning(f"Error loading video {sample['video_path']}: {e}")
             return None
+
+        # Resize frames to consistent resolution before apply_chat_template
+        # so token count in text and input_ids always match
+        frames = [_resize_frame(f) for f in frames]
 
         # Build chat messages
         messages = [

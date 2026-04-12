@@ -106,7 +106,7 @@ torchrun \
     --logging_dir "${OUTPUT_DIR}/runs" \
     --save_strategy epoch \
     --save_total_limit 3 \
-    --dataloader_num_workers 4 \
+    --dataloader_num_workers 0 \
     --remove_unused_columns False \
     --ddp_find_unused_parameters False \
     --report_to tensorboard \
