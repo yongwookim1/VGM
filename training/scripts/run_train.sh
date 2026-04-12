@@ -19,7 +19,7 @@ NUM_GPUS=4
 MASTER_PORT="${MASTER_PORT:-29500}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-MODEL_NAME="etri-vilab/SafeQwen2.5-VL-7B"
+MODEL_NAME="${MODEL_NAME:-etri-vilab/SafeQwen2.5-VL-7B}"
 PROCESSOR_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
 DATA_PATH="${REPO_ROOT}/training/data/train_data.json"
 DS_CONFIG="${REPO_ROOT}/training/configs/deepspeed_zero2.json"
