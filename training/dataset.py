@@ -157,18 +157,24 @@ class VideoSafetyDataset(Dataset):
         )
 
         # Process with the Qwen2.5-VL processor
+        # NOTE: do NOT use truncation=True here — truncating at processor level
+        # breaks the video token count consistency check between text and input_ids.
+        # Instead, truncate the resulting tensors manually after processing.
         inputs = self.processor(
             text=[text],
             videos=[frames],
             padding=False,
-            truncation=True,
-            max_length=self.max_length,
             return_tensors="pt",
         )
 
         # Squeeze batch dimension (processor returns [1, seq_len])
         input_ids = inputs["input_ids"].squeeze(0)
         attention_mask = inputs["attention_mask"].squeeze(0)
+
+        # Manual truncation after processing (safe — tensors only, no token mismatch)
+        if input_ids.shape[0] > self.max_length:
+            input_ids = input_ids[:self.max_length]
+            attention_mask = attention_mask[:self.max_length]
         pixel_values_videos = inputs.get("pixel_values_videos")
         video_grid_thw = inputs.get("video_grid_thw")
 
