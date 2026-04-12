@@ -137,9 +137,10 @@ class VideoSafetyDataset(Dataset):
                     f"missing videos ({len(self.data)} remaining)"
                 )
 
-        # Get special token IDs for label masking
+        # Get special token IDs for label masking and video alignment check
         self.im_start_id = processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
         self.im_end_id = processor.tokenizer.convert_tokens_to_ids("<|im_end|>")
+        self.video_pad_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>")
         self.ignore_index = -100
 
     def __len__(self):
@@ -196,9 +197,23 @@ class VideoSafetyDataset(Dataset):
         input_ids = inputs["input_ids"].squeeze(0)
         attention_mask = inputs["attention_mask"].squeeze(0)
 
-        # Manual truncation after processing (safe — tensors only, no token mismatch)
+        # Manual truncation after processing.
+        # NOTE: we must NOT truncate video placeholder tokens — the model checks
+        # that the count in input_ids matches the visual feature count from the
+        # vision encoder.  If truncation would remove any <|video_pad|> tokens,
+        # skip this sample (returns None; collator filters None entries).
         if input_ids.shape[0] > self.max_length:
-            input_ids = input_ids[:self.max_length]
+            truncated_ids = input_ids[:self.max_length]
+            n_video_full = (input_ids == self.video_pad_id).sum().item()
+            n_video_trunc = (truncated_ids == self.video_pad_id).sum().item()
+            if n_video_trunc != n_video_full:
+                logger.warning(
+                    f"Skipping sample {idx}: truncation to {self.max_length} would "
+                    f"remove {n_video_full - n_video_trunc} video placeholder tokens "
+                    f"(seq_len={input_ids.shape[0]})"
+                )
+                return None
+            input_ids = truncated_ids
             attention_mask = attention_mask[:self.max_length]
         pixel_values_videos = inputs.get("pixel_values_videos")
         video_grid_thw = inputs.get("video_grid_thw")
