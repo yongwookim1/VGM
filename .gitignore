@@ -193,7 +193,8 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# Data & training outputs
+# Data, models & training outputs
 data/
 training/data/
+models/
 outputs/
