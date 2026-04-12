@@ -1,5 +1,6 @@
 #!/bin/bash
 # Training script for SafeQwen2.5-VL-7B video fine-tuning on HoliSafe safety categories.
+# Hyperparameters follow the original HoliSafe paper (Lee et al., 2025).
 #
 # Prerequisites:
 #   1. pip install transformers peft deepspeed accelerate qwen-vl-utils av opencv-python
@@ -9,20 +10,12 @@
 #
 # Usage:
 #   bash training/scripts/run_train.sh
-#
-# Overridable env vars:
-#   CUDA_VISIBLE_DEVICES (default "0,1")
-#   MASTER_PORT          (default 29500)
-#   NUM_TRAIN_EPOCHS     (default 3)
-#   PER_DEVICE_BS        (default 1)
-#   GRAD_ACCUM           (default 4)
-#   LR                   (default 2e-5)
 
 set -euo pipefail
 
 # --- Configuration ---
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
-NUM_GPUS="$(echo "${CUDA_VISIBLE_DEVICES}" | awk -F',' '{print NF}')"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
+NUM_GPUS=4
 MASTER_PORT="${MASTER_PORT:-29500}"
 
 REPO_ROOT="/home/kyw1654/holisafe"
@@ -32,10 +25,15 @@ DATA_PATH="${REPO_ROOT}/training/data/train_data.json"
 DS_CONFIG="${REPO_ROOT}/training/configs/deepspeed_zero2.json"
 OUTPUT_DIR="${REPO_ROOT}/outputs/safeqwen-video-lora-$(date +%Y%m%d_%H%M%S)"
 
-NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-3}"
-PER_DEVICE_BS="${PER_DEVICE_BS:-1}"
-GRAD_ACCUM="${GRAD_ACCUM:-4}"
-LR="${LR:-2e-5}"
+# Paper settings (Table 6, SafeQwen column)
+NUM_TRAIN_EPOCHS=5
+GLOBAL_BATCH_SIZE=128
+PER_DEVICE_BS=4
+GRAD_ACCUM=$((GLOBAL_BATCH_SIZE / (PER_DEVICE_BS * NUM_GPUS)))  # 128 / (4*4) = 8
+LR="5e-5"
+SAFETY_HEAD_LR="5e-5"
+LORA_R=64
+LORA_ALPHA=64
 
 # --- Sanity checks ---
 if [[ ! -f "${DATA_PATH}" ]]; then
@@ -54,11 +52,11 @@ cd "${REPO_ROOT}"
 # --- Runtime env ---
 export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
-# Prevent NCCL P2P hangs on some multi-GPU boxes; comment out if your topology is fine.
 export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1}
 
 echo "=============================================="
 echo "  SafeQwen2.5-VL Video Safety Fine-tuning"
+echo "  (Paper-aligned hyperparameters)"
 echo "=============================================="
 echo "  GPUs             : ${CUDA_VISIBLE_DEVICES} (${NUM_GPUS} processes)"
 echo "  Model            : ${MODEL_NAME}"
@@ -67,8 +65,11 @@ echo "  Output           : ${OUTPUT_DIR}"
 echo "  Epochs           : ${NUM_TRAIN_EPOCHS}"
 echo "  Per-device BS    : ${PER_DEVICE_BS}"
 echo "  Grad accum       : ${GRAD_ACCUM}"
-echo "  Effective BS     : $((PER_DEVICE_BS * GRAD_ACCUM * NUM_GPUS))"
-echo "  LR               : ${LR}"
+echo "  Global BS        : ${GLOBAL_BATCH_SIZE}"
+echo "  Backbone LR      : ${LR}"
+echo "  Safety head LR   : ${SAFETY_HEAD_LR}"
+echo "  LoRA r           : ${LORA_R}"
+echo "  LoRA alpha       : ${LORA_ALPHA}"
 echo "=============================================="
 
 # --- Launch training ---
@@ -85,11 +86,11 @@ torchrun \
     --fps 1.0 \
     --max_length 2048 \
     --use_lora True \
-    --lora_r 64 \
-    --lora_alpha 128 \
+    --lora_r "${LORA_R}" \
+    --lora_alpha "${LORA_ALPHA}" \
     --lora_dropout 0.05 \
     --lora_target_modules "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj" \
-    --safety_head_lr 1e-4 \
+    --safety_head_lr "${SAFETY_HEAD_LR}" \
     --output_dir "${OUTPUT_DIR}" \
     --num_train_epochs "${NUM_TRAIN_EPOCHS}" \
     --per_device_train_batch_size "${PER_DEVICE_BS}" \

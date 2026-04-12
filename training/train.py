@@ -165,7 +165,11 @@ def load_model(model_args: ModelArguments):
 
 
 def apply_lora(model, lora_args: LoRAArguments):
-    """Apply LoRA adapters to the model."""
+    """Apply LoRA adapters to the model.
+
+    Paper setting: vision encoder + visual projection are fully fine-tuned,
+    LLM gets LoRA, and the safety head (VGM) is fully trained.
+    """
     target_modules = [m.strip() for m in lora_args.lora_target_modules.split(",")]
 
     lora_config = LoraConfig(
@@ -179,6 +183,12 @@ def apply_lora(model, lora_args: LoRAArguments):
     )
 
     model = get_peft_model(model, lora_config)
+
+    # Unfreeze vision encoder + visual projection (fully fine-tuned per paper)
+    for name, param in model.named_parameters():
+        if "visual" in name:
+            param.requires_grad = True
+
     model.print_trainable_parameters()
     return model
 
@@ -253,6 +263,18 @@ def main():
     logger.info(f"Saving model to {training_args.output_dir}")
     trainer.save_model()
     trainer.save_state()
+
+    # Save fine-tuned visual encoder weights separately
+    # (LoRA adapter save only covers LLM adapters + modules_to_save)
+    if lora_args.use_lora:
+        visual_state = {
+            k: v.cpu()
+            for k, v in trainer.model.named_parameters()
+            if "visual" in k
+        }
+        visual_path = os.path.join(training_args.output_dir, "visual_encoder.bin")
+        torch.save(visual_state, visual_path)
+        logger.info(f"Saved visual encoder weights ({len(visual_state)} tensors) to {visual_path}")
 
     # Log metrics
     metrics = train_result.metrics
