@@ -18,7 +18,7 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 NUM_GPUS=4
 MASTER_PORT="${MASTER_PORT:-29500}"
 
-REPO_ROOT="/home/kyw1654/holisafe"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 MODEL_NAME="etri-vilab/SafeQwen2.5-VL-7B"
 PROCESSOR_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
 DATA_PATH="${REPO_ROOT}/training/data/train_data.json"
