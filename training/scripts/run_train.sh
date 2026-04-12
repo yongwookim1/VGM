@@ -58,6 +58,7 @@ export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 # Uncomment for verbose NCCL diagnostics:
 # export NCCL_DEBUG=INFO
 # export NCCL_DEBUG_SUBSYS=ALL
+export CUDA_LAUNCH_BLOCKING=1
 
 echo "=============================================="
 echo "  SafeQwen2.5-VL Video Safety Fine-tuning"
@@ -87,7 +88,7 @@ torchrun \
     --processor_name "${PROCESSOR_NAME}" \
     --trust_remote_code True \
     --data_path "${DATA_PATH}" \
-    --max_frames 16 \
+    --max_frames 8 \
     --fps 1.0 \
     --max_length 2048 \
     --use_lora True \
