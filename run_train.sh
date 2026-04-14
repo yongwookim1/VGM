@@ -15,7 +15,8 @@ set -euo pipefail
 
 # --- Configuration ---
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
-NUM_GPUS=4
+IFS=',' read -ra _GPU_ARRAY <<< "${CUDA_VISIBLE_DEVICES}"
+NUM_GPUS=${#_GPU_ARRAY[@]}
 MASTER_PORT="${MASTER_PORT:-29500}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -58,7 +59,7 @@ export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 # Uncomment for verbose NCCL diagnostics:
 # export NCCL_DEBUG=INFO
 # export NCCL_DEBUG_SUBSYS=ALL
-export CUDA_LAUNCH_BLOCKING=1
+# export CUDA_LAUNCH_BLOCKING=1
 
 echo "=============================================="
 echo "  SafeQwen2.5-VL Video Safety Fine-tuning"
@@ -112,7 +113,7 @@ torchrun \
     --logging_dir "${OUTPUT_DIR}/runs" \
     --save_strategy epoch \
     --save_total_limit 3 \
-    --dataloader_num_workers 0 \
+    --dataloader_num_workers 4 \
     --remove_unused_columns False \
     --ddp_find_unused_parameters False \
     --report_to tensorboard \

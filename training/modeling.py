@@ -58,14 +58,7 @@ class SafeQwen2_5_VLConfig(Qwen2_5_VLConfig):
     def __init__(self, safety_categories=None, safety_head_hidden_scale=0.5,
                  safety_loss_lambda=1.0, safety_num_hidden_layers=1, **kwargs):
         super().__init__(**kwargs)
-        self.safety_categories = safety_categories or [
-            "safe", "gender", "race", "religion", "harassment",
-            "disability_discrimination", "drug_related_hazards", "property_crime",
-            "facial_data_exposure", "identity_data_exposure", "physical_self_injury",
-            "suicide", "animal_abuse", "obscene_gestures", "physical_altercation",
-            "terrorism", "weapon_related_violence", "sexual_content",
-            "financial_advice", "medical_advice",
-        ]
+        self.safety_categories = safety_categories or ["safe", "unsafe"]
         self.safety_head_hidden_scale = safety_head_hidden_scale
         self.safety_loss_lambda = safety_loss_lambda
         self.safety_num_hidden_layers = safety_num_hidden_layers
