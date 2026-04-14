@@ -2,13 +2,13 @@
 # Evaluate the most recently fine-tuned model on the test set.
 #
 # Usage:
-#   bash eval/run_eval.sh
-#   bash eval/run_eval.sh --model_path outputs/safeqwen-video-lora-20260413_120000
-#   bash eval/run_eval.sh --resume   # skip already-predicted samples
+#   bash run_eval.sh
+#   bash run_eval.sh --model_path outputs/safeqwen-video-lora-20260413_120000
+#   bash run_eval.sh --resume   # skip already-predicted samples
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 BASE_MODEL="${BASE_MODEL:-${REPO_ROOT}/models/SafeQwen2.5-VL-7B}"
 OUTPUTS_DIR="${REPO_ROOT}/outputs"
 TEST_DATA="${REPO_ROOT}/training/data/test_data.json"
@@ -17,7 +17,7 @@ RESULTS_DIR="${REPO_ROOT}/results"
 MODEL_PATH=""
 RESUME=""
 NO_LORA=""
-MAX_FRAMES=16
+MAX_FRAMES=8
 FPS=1.0
 MAX_NEW_TOKENS=512
 

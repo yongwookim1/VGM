@@ -44,9 +44,8 @@ def main():
     if skipped:
         print(f"Skipped {skipped} samples (missing pred or safety_label=-100)\n")
 
-    # safety_label is a 20-class index: 0=safe, 1-19=unsafe category.
-    # Binarize: 0 -> safe (0), anything else -> unsafe (1).
-    y_true = [0 if d["safety_label"] == 0 else 1 for d in valid]
+    # safety_label is binary: 0=safe, 1=unsafe.
+    y_true = [d["safety_label"] for d in valid]
     y_pred = [0 if d["safety_pred"] == 0 else 1 for d in valid]
 
     # Overall metrics

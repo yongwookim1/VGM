@@ -33,7 +33,7 @@ from transformers import AutoProcessor
 
 # Allow imports from the training package (dataset utilities)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "training"))
-from dataset import sample_frames_from_video, _resize_frame, SYSTEM_PROMPT
+from dataset import sample_frames_from_video, _resize_frame
 from modeling import SafeQwen2_5_VLForConditionalGeneration, SafeQwen2_5_VLConfig
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -103,7 +103,6 @@ def generate_prediction(model, processor, sample, args):
     frames = [_resize_frame(f) for f in frames]
 
     messages = [
-        {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
         {
             "role": "user",
             "content": [
@@ -158,7 +157,7 @@ def main():
     parser.add_argument("--output_file", required=True,
                         help="Where to write predictions JSON")
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--max_frames", type=int, default=16)
+    parser.add_argument("--max_frames", type=int, default=8)
     parser.add_argument("--fps", type=float, default=1.0)
     parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--no_lora", action="store_true",
