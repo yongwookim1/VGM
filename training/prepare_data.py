@@ -3,10 +3,7 @@ Data preparation script: merge VideoChatGPT and Video-SafetyBench into a unified
 training JSON for SafeQwen2.5-VL video fine-tuning.
 
 Usage:
-    python training/prepare_data.py \
-        --videochatgpt_dir data/videochatgpt \
-        --safetybench_dir data/video_safetybench \
-        --output_path training/data/train_data.json
+    python training/prepare_data.py --videochatgpt_dir data/videochatgpt --safetybench_dir data/video_safetybench --output_path training/data/train_data.json
 """
 
 import argparse
@@ -33,8 +30,19 @@ REFUSAL_TEMPLATES = [
 ]
 
 
-def load_videochatgpt(data_dir: str, video_dir: str):
-    """Load all VideoChatGPT splits. Annotations in data_dir, videos in video_dir."""
+def find_video(video_dir: str, video_name: str) -> str:
+    """Find a video file by name, trying multiple extensions."""
+    for ext in [".mkv", ".mp4", ".avi", ".webm"]:
+        path = os.path.join(video_dir, f"{video_name}{ext}")
+        if os.path.isfile(path):
+            return path
+    # Return default path (will be caught by validation)
+    return os.path.join(video_dir, f"{video_name}.mp4")
+
+
+def load_videochatgpt(data_dir: str):
+    """Load all VideoChatGPT splits. Videos in data_dir/Test_Videos/."""
+    video_dir = os.path.join(data_dir, "Test_Videos")
     splits = ["generic_data", "consistency_data", "temporal_data"]
     samples = []
 
@@ -49,7 +57,7 @@ def load_videochatgpt(data_dir: str, video_dir: str):
 
         for item in data:
             video_name = item["video_name"]
-            video_path = os.path.join(video_dir, f"{video_name}.mp4")
+            video_path = find_video(video_dir, video_name)
 
             samples.append({
                 "dataset": "videochatgpt",
@@ -94,10 +102,8 @@ def load_safetybench(data_dir: str):
             video_path = os.path.join(data_dir, item["video_path"])
             subcategory = item.get("subcategory", "")
             category = item.get("category", "")
-
             sub_display = subcategory.replace("_", " ").lower()
             answer = random.choice(REFUSAL_TEMPLATES).format(subcategory=sub_display)
-            safety_label = 1  # both splits contain unsafe videos
 
             samples.append({
                 "dataset": f"safetybench_{split_type}",
@@ -106,7 +112,7 @@ def load_safetybench(data_dir: str):
                 "video_path": video_path,
                 "question": item["question"],
                 "answer": answer,
-                "safety_label": safety_label,
+                "safety_label": 1,  # both splits contain unsafe videos
                 "category": category,
                 "subcategory": subcategory,
             })
@@ -115,7 +121,6 @@ def load_safetybench(data_dir: str):
 
 
 def validate_videos(samples: list[dict]) -> dict:
-    """Check which video files actually exist."""
     total = len(samples)
     found = sum(1 for s in samples if os.path.isfile(s["video_path"]))
     missing_paths = set(
@@ -131,35 +136,17 @@ def validate_videos(samples: list[dict]) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Prepare unified training data")
-    parser.add_argument(
-        "--videochatgpt_dir",
-        default="data/videochatgpt",
-    )
-    parser.add_argument(
-        "--activitynet_video_dir",
-        default="data/activitynet",
-    )
-    parser.add_argument(
-        "--safetybench_dir",
-        default="data/video_safetybench",
-    )
-    parser.add_argument(
-        "--output_path",
-        default="training/data/train_data.json",
-    )
+    parser.add_argument("--videochatgpt_dir", default="data/videochatgpt")
+    parser.add_argument("--safetybench_dir", default="data/video_safetybench")
+    parser.add_argument("--output_path", default="training/data/train_data.json")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--test_ratio",
-        type=float,
-        default=0.2,
-        help="Fraction of data to hold out for testing (0 to skip split)",
-    )
+    parser.add_argument("--test_ratio", type=float, default=0.2)
     args = parser.parse_args()
 
     random.seed(args.seed)
 
     print("Loading VideoChatGPT data...")
-    vcgpt_samples = load_videochatgpt(args.videochatgpt_dir, args.activitynet_video_dir)
+    vcgpt_samples = load_videochatgpt(args.videochatgpt_dir)
     print(f"  Loaded {len(vcgpt_samples)} samples")
 
     print("Loading Video-SafetyBench data...")
