@@ -69,6 +69,7 @@ def load_model_and_processor(args):
         config=config,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
+        ignore_mismatched_sizes=True,
     )
 
     if not args.no_lora:
