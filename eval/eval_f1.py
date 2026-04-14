@@ -73,10 +73,21 @@ def main():
         print(f"{'='*45}")
         print(f"  {'Category':<35} {'N':>5}  {'F1':>6}")
         print(f"  {'-'*35}  {'-'*5}  {'-'*6}")
+        per_cat_metrics = {}
         for cat in sorted(by_cat):
             cm = compute_metrics(by_cat[cat]["true"], by_cat[cat]["pred"])
             n = len(by_cat[cat]["true"])
             print(f"  {cat:<35} {n:>5}  {cm['f1']:>6.4f}")
+            per_cat_metrics[cat] = {**cm, "n": n}
+
+    # Save JSON alongside input file
+    json_path = args.input_file.replace(".json", "_metrics.json")
+    out = {"overall": {**m, "n": len(valid)}}
+    if len(by_cat) > 1:
+        out["per_category"] = per_cat_metrics
+    with open(json_path, "w") as f:
+        json.dump(out, f, indent=2)
+    print(f"\nMetrics saved to {json_path}")
 
 
 if __name__ == "__main__":
