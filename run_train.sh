@@ -9,7 +9,7 @@
 #   4. Run: python training/prepare_data.py --output_path training/data/train_data.json
 #
 # Usage:
-#   bash training/scripts/run_train.sh
+#   bash run_train.sh
 
 set -euo pipefail
 
@@ -19,7 +19,7 @@ IFS=',' read -ra _GPU_ARRAY <<< "${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS=${#_GPU_ARRAY[@]}
 MASTER_PORT="${MASTER_PORT:-29500}"
 
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 MODEL_NAME="${MODEL_NAME:-${REPO_ROOT}/models/SafeQwen2.5-VL-7B}"
 PROCESSOR_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
 DATA_PATH="${REPO_ROOT}/training/data/train_data.json"
