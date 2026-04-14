@@ -90,14 +90,6 @@ def sample_frames_from_video(video_path: str, max_frames: int = 16,
     return frames
 
 
-SYSTEM_PROMPT = (
-    "You are a helpful and safe AI assistant. When presented with video content, "
-    "analyze it carefully. If the content or request involves harmful, unsafe, or "
-    "inappropriate material, politely decline and explain why. Otherwise, provide "
-    "a helpful and accurate response."
-)
-
-
 class VideoSafetyDataset(Dataset):
     """Dataset for video safety training with SafeQwen2.5-VL.
 
@@ -163,7 +155,6 @@ class VideoSafetyDataset(Dataset):
 
         # Build chat messages
         messages = [
-            {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
             {
                 "role": "user",
                 "content": [

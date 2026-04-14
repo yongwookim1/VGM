@@ -4,18 +4,16 @@ training JSON for SafeQwen2.5-VL video fine-tuning.
 
 Usage:
     python training/prepare_data.py \
-        --videochatgpt_dir /home/kyw1654/vsbench/data/videochatgpt \
-        --safetybench_dir /home/kyw1654/vsbench/data/video_safetybench \
-        --activitynet_video_dir /home/kyw1654/vsbench/videos/activitynet \
-        --output_path training/data/train_data.json \
-        --languages en ko
+        --videochatgpt_dir data/videochatgpt \
+        --safetybench_dir data/video_safetybench \
+        --output_path training/data/train_data.json
 """
 
 import argparse
 import json
 import os
 import random
-from pathlib import Path
+from collections import Counter
 
 from category_mapping import get_safety_label
 
@@ -34,117 +32,84 @@ REFUSAL_TEMPLATES = [
     "potentially harmful content. Please feel free to ask me about something else.",
 ]
 
-BENIGN_TEMPLATES = [
-    "Based on the video, I can provide a general description of what is shown. "
-    "The content appears to depict a scene that can be discussed in a safe and "
-    "informative manner. Could you clarify what specific aspect you'd like to know about?",
-    "Looking at the video content, I can offer an objective and informative response. "
-    "The video shows a scene that I can describe factually. What would you like to "
-    "know more about?",
-    "I can see the video content and am happy to provide a helpful, factual response. "
-    "Let me share what I observe and address your question constructively.",
-]
 
-
-def load_videochatgpt(data_dir: str, video_dir: str, languages: list[str]):
-    """Load all VideoChatGPT splits and produce unified samples."""
+def load_videochatgpt(data_dir: str):
+    """Load all VideoChatGPT splits. Videos are expected inside data_dir."""
     splits = ["generic_data", "consistency_data", "temporal_data"]
     samples = []
 
     for split in splits:
-        for lang in languages:
-            suffix = f"_{lang}" if lang != "en" else ""
-            filename = f"{split}{suffix}.json" if lang != "en" else f"{split}.json"
-            filepath = os.path.join(data_dir, filename)
-            if not os.path.exists(filepath):
-                print(f"  [SKIP] {filepath} not found")
-                continue
+        filepath = os.path.join(data_dir, f"{split}.json")
+        if not os.path.exists(filepath):
+            print(f"  [SKIP] {filepath} not found")
+            continue
 
-            with open(filepath) as f:
-                data = json.load(f)
+        with open(filepath) as f:
+            data = json.load(f)
 
-            for item in data:
-                video_name = item["video_name"]
-                video_path = os.path.join(video_dir, f"{video_name}.mp4")
-                question = item["question"]
-                answer = item["answer"]
+        for item in data:
+            video_name = item["video_name"]
+            video_path = os.path.join(data_dir, f"{video_name}.mp4")
 
-                samples.append({
-                    "dataset": "videochatgpt",
-                    "split": split,
-                    "question_id": item["question_id"],
-                    "video_path": video_path,
-                    "question": question,
-                    "answer": answer,
-                    "safety_label": 0,  # all safe
-                    "language": lang,
-                })
+            samples.append({
+                "dataset": "videochatgpt",
+                "split": split,
+                "question_id": item["question_id"],
+                "video_path": video_path,
+                "question": item["question"],
+                "answer": item["answer"],
+                "safety_label": 0,  # all safe
+            })
 
-                # consistency_data may have question_2
-                if split == "consistency_data":
-                    q2 = item.get("question_2", "None")
-                    if q2 and q2 != "None":
-                        samples.append({
-                            "dataset": "videochatgpt",
-                            "split": split,
-                            "question_id": item["question_id"] + "_q2",
-                            "video_path": video_path,
-                            "question": q2,
-                            "answer": answer,
-                            "safety_label": 0,
-                            "language": lang,
-                        })
+            if split == "consistency_data":
+                q2 = item.get("question_2", "None")
+                if q2 and q2 != "None":
+                    samples.append({
+                        "dataset": "videochatgpt",
+                        "split": split,
+                        "question_id": item["question_id"] + "_q2",
+                        "video_path": video_path,
+                        "question": q2,
+                        "answer": item["answer"],
+                        "safety_label": 0,
+                    })
 
     return samples
 
 
-def load_safetybench(data_dir: str, languages: list[str]):
+def load_safetybench(data_dir: str):
     """Load Video-SafetyBench harmful + benign splits."""
     samples = []
 
     for split_type in ["harmful", "benign"]:
-        for lang in languages:
-            suffix = f"_{lang}" if lang != "en" else ""
-            filename = (
-                f"{split_type}_data{suffix}.json"
-                if lang != "en"
-                else f"{split_type}_data.json"
-            )
-            filepath = os.path.join(data_dir, filename)
-            if not os.path.exists(filepath):
-                print(f"  [SKIP] {filepath} not found")
-                continue
+        filepath = os.path.join(data_dir, f"{split_type}_data.json")
+        if not os.path.exists(filepath):
+            print(f"  [SKIP] {filepath} not found")
+            continue
 
-            with open(filepath) as f:
-                data = json.load(f)
+        with open(filepath) as f:
+            data = json.load(f)
 
-            for item in data:
-                video_rel_path = item["video_path"]
-                video_path = os.path.join(data_dir, video_rel_path)
-                subcategory = item.get("subcategory", "")
-                category = item.get("category", "")
+        for item in data:
+            video_path = os.path.join(data_dir, item["video_path"])
+            subcategory = item.get("subcategory", "")
+            category = item.get("category", "")
 
-                if split_type == "harmful":
-                    safety_label = get_safety_label(subcategory, category)
-                    template = random.choice(REFUSAL_TEMPLATES)
-                    sub_display = subcategory.replace("_", " ").lower()
-                    answer = template.format(subcategory=sub_display)
-                else:
-                    safety_label = 0  # benign
-                    answer = random.choice(BENIGN_TEMPLATES)
+            sub_display = subcategory.replace("_", " ").lower()
+            answer = random.choice(REFUSAL_TEMPLATES).format(subcategory=sub_display)
+            safety_label = 1  # both splits contain unsafe videos
 
-                samples.append({
-                    "dataset": f"safetybench_{split_type}",
-                    "split": split_type,
-                    "question_id": item["question_id"],
-                    "video_path": video_path,
-                    "question": item["question"],
-                    "answer": answer,
-                    "safety_label": safety_label,
-                    "category": category,
-                    "subcategory": subcategory,
-                    "language": lang,
-                })
+            samples.append({
+                "dataset": f"safetybench_{split_type}",
+                "split": split_type,
+                "question_id": item["question_id"],
+                "video_path": video_path,
+                "question": item["question"],
+                "answer": answer,
+                "safety_label": safety_label,
+                "category": category,
+                "subcategory": subcategory,
+            })
 
     return samples
 
@@ -168,68 +133,53 @@ def main():
     parser = argparse.ArgumentParser(description="Prepare unified training data")
     parser.add_argument(
         "--videochatgpt_dir",
-        default="/home/kyw1654/vsbench/data/videochatgpt",
+        default="data/videochatgpt",
     )
     parser.add_argument(
         "--safetybench_dir",
-        default="/home/kyw1654/vsbench/data/video_safetybench",
-    )
-    parser.add_argument(
-        "--activitynet_video_dir",
-        default="/home/kyw1654/vsbench/videos/activitynet",
+        default="data/video_safetybench",
     )
     parser.add_argument(
         "--output_path",
         default="training/data/train_data.json",
     )
-    parser.add_argument(
-        "--languages",
-        nargs="+",
-        default=["en"],
-        help="Languages to include: en, ko, or both",
-    )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--test_ratio", type=float, default=0.2,
-                        help="Fraction of data to hold out for testing (0 to skip split)")
+    parser.add_argument(
+        "--test_ratio",
+        type=float,
+        default=0.2,
+        help="Fraction of data to hold out for testing (0 to skip split)",
+    )
     args = parser.parse_args()
 
     random.seed(args.seed)
 
     print("Loading VideoChatGPT data...")
-    vcgpt_samples = load_videochatgpt(
-        args.videochatgpt_dir, args.activitynet_video_dir, args.languages
-    )
-    print(f"  Loaded {len(vcgpt_samples)} VideoChatGPT samples")
+    vcgpt_samples = load_videochatgpt(args.videochatgpt_dir)
+    print(f"  Loaded {len(vcgpt_samples)} samples")
 
     print("Loading Video-SafetyBench data...")
-    sb_samples = load_safetybench(args.safetybench_dir, args.languages)
-    print(f"  Loaded {len(sb_samples)} Video-SafetyBench samples")
+    sb_samples = load_safetybench(args.safetybench_dir)
+    print(f"  Loaded {len(sb_samples)} samples")
 
     all_samples = vcgpt_samples + sb_samples
     random.shuffle(all_samples)
 
-    print(f"\nTotal samples: {len(all_samples)}")
-    print(f"  VideoChatGPT: {len(vcgpt_samples)}")
-    print(f"  SafetyBench: {len(sb_samples)}")
+    print(f"\nTotal: {len(all_samples)} (VideoChatGPT: {len(vcgpt_samples)}, SafetyBench: {len(sb_samples)})")
 
-    # Safety label distribution
-    from collections import Counter
     label_counts = Counter(s["safety_label"] for s in all_samples)
     print(f"\nSafety label distribution:")
     for label, count in sorted(label_counts.items()):
-        print(f"  {label}: {count}")
+        print(f"  {'safe' if label == 0 else 'unsafe'} ({label}): {count}")
 
-    # Validate video availability
     print("\nValidating video files...")
     stats = validate_videos(all_samples)
     print(f"  Videos found: {stats['found']}/{stats['total']}")
     if stats["missing"] > 0:
         print(f"  Videos missing: {stats['missing']}")
-        print(f"  Sample missing paths:")
         for p in stats["missing_paths_sample"]:
             print(f"    {p}")
 
-    # Train/test split
     output_dir = os.path.dirname(args.output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
@@ -244,8 +194,7 @@ def main():
             json.dump(train_samples, f, indent=2, ensure_ascii=False)
         with open(test_path, "w") as f:
             json.dump(test_samples, f, indent=2, ensure_ascii=False)
-        print(f"\nSaved {len(train_samples)} train samples to {args.output_path}")
-        print(f"Saved {len(test_samples)} test samples to {test_path}")
+        print(f"\nSaved {len(train_samples)} train / {len(test_samples)} test samples")
     else:
         with open(args.output_path, "w") as f:
             json.dump(all_samples, f, indent=2, ensure_ascii=False)
