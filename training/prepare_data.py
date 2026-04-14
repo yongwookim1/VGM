@@ -33,8 +33,8 @@ REFUSAL_TEMPLATES = [
 ]
 
 
-def load_videochatgpt(data_dir: str):
-    """Load all VideoChatGPT splits. Videos are expected inside data_dir."""
+def load_videochatgpt(data_dir: str, video_dir: str):
+    """Load all VideoChatGPT splits. Annotations in data_dir, videos in video_dir."""
     splits = ["generic_data", "consistency_data", "temporal_data"]
     samples = []
 
@@ -49,7 +49,7 @@ def load_videochatgpt(data_dir: str):
 
         for item in data:
             video_name = item["video_name"]
-            video_path = os.path.join(data_dir, f"{video_name}.mp4")
+            video_path = os.path.join(video_dir, f"{video_name}.mp4")
 
             samples.append({
                 "dataset": "videochatgpt",
@@ -136,6 +136,10 @@ def main():
         default="data/videochatgpt",
     )
     parser.add_argument(
+        "--activitynet_video_dir",
+        default="data/activitynet",
+    )
+    parser.add_argument(
         "--safetybench_dir",
         default="data/video_safetybench",
     )
@@ -155,7 +159,7 @@ def main():
     random.seed(args.seed)
 
     print("Loading VideoChatGPT data...")
-    vcgpt_samples = load_videochatgpt(args.videochatgpt_dir)
+    vcgpt_samples = load_videochatgpt(args.videochatgpt_dir, args.activitynet_video_dir)
     print(f"  Loaded {len(vcgpt_samples)} samples")
 
     print("Loading Video-SafetyBench data...")
