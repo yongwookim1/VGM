@@ -7,7 +7,6 @@
     "offload_optimizer": {
       "device": "none"
     },
-    "allgather_partition_count": 1,
     "allgather_bucket_size": 5e8,
     "reduce_scatter": true,
     "reduce_bucket_size": 5e8,
