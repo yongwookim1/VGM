@@ -159,6 +159,7 @@ def load_model(model_args: ModelArguments):
         config=config,
         torch_dtype=torch.bfloat16,
         trust_remote_code=model_args.trust_remote_code,
+        ignore_mismatched_sizes=True,
     )
 
     return model
