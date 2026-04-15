@@ -72,7 +72,10 @@ def main():
     # Lazy imports so --help is fast
     from vllm import LLM, SamplingParams
     from transformers import AutoProcessor
-    from qwen_vl_utils import process_vision_info
+
+    # Use our own OpenCV-based frame sampler (avoids torchvision video_fps bug)
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "training"))
+    from dataset import sample_frames_from_video, _resize_frame
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output_file)), exist_ok=True)
 
@@ -118,9 +121,24 @@ def main():
     )
     processor = AutoProcessor.from_pretrained(args.model_path)
 
-    # Build inputs
+    # Build inputs — use OpenCV frame sampling to avoid torchvision bugs
     input_list = []
+    skipped = []
+    valid_pending = []
     for sample in pending:
+        try:
+            frames = sample_frames_from_video(
+                sample["video_path"],
+                max_frames=8,
+                fps=args.fps,
+            )
+        except Exception as e:
+            logger.warning(f"Cannot load video {sample['video_path']}: {e}")
+            skipped.append(sample)
+            continue
+
+        frames = [_resize_frame(f) for f in frames]
+
         messages = [
             {
                 "role": "system",
@@ -129,36 +147,26 @@ def main():
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "video",
-                        "video": f"file://{sample['video_path']}",
-                        "fps": args.fps,
-                        "max_pixels": args.max_pixels,
-                    },
+                    {"type": "video", "video": frames},
                     {"type": "text", "text": sample["question"]},
                 ],
             },
         ]
 
-        image_inputs, video_inputs, video_kwargs = process_vision_info(
-            messages, return_video_kwargs=True
-        )
-
-        mm_data = {}
-        if image_inputs is not None:
-            mm_data["image"] = image_inputs
-        if video_inputs is not None:
-            mm_data["video"] = video_inputs
-
         prompt = processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
 
-        llm_inputs = {"prompt": prompt, "multi_modal_data": mm_data}
-        if video_kwargs:
-            llm_inputs["mm_processor_kwargs"] = video_kwargs
+        mm_data = {"video": frames}
 
+        llm_inputs = {"prompt": prompt, "multi_modal_data": mm_data}
         input_list.append(llm_inputs)
+        valid_pending.append(sample)
+
+    if skipped:
+        logger.warning(f"Skipped {len(skipped)} samples due to video loading errors")
+
+    pending = valid_pending
 
     # Batch inference
     logger.info("Running vLLM batch inference...")
