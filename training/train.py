@@ -1,21 +1,18 @@
 """
-Main training script for fine-tuning SafeQwen2.5-VL-7B on video datasets.
+Main training script for fine-tuning SafeLLaVA-7B on video datasets
+with binary safety classification (safe/unsafe).
 
 Supports:
-- LoRA via PEFT (attention + MLP projections) with full safety head training
+- LoRA via PEFT (LLM layers) with full safety head training
 - DeepSpeed ZeRO-2 for multi-GPU
 - Joint language modeling + safety classification loss
 - Gradient checkpointing for memory efficiency
 
 Usage:
-    accelerate launch --config_file training/configs/accelerate_config.yaml \
-        training/train.py --config training/configs/train_config.yaml
-
-    Or directly:
-    python training/train.py \
-        --model_name_or_path etri-vilab/SafeQwen2.5-VL-7B \
+    torchrun --nproc_per_node=4 training/train.py \
+        --model_name_or_path models/SafeLLaVA-7B \
         --data_path training/data/train_data.json \
-        --output_dir outputs/safequen-video-lora
+        --output_dir outputs/safellava-video-lora
 """
 
 import logging
@@ -25,20 +22,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model, TaskType
 from transformers import (
-    AutoProcessor,
+    AutoTokenizer,
     HfArgumentParser,
     Trainer,
     TrainingArguments,
 )
-
-# Add parent dir to path for local imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from modeling import SafeQwen2_5_VLForConditionalGeneration, SafeQwen2_5_VLConfig
-from dataset import VideoSafetyDataset
-from collator import VideoSafetyCollator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,12 +38,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ModelArguments:
     model_name_or_path: str = field(
-        default="etri-vilab/SafeQwen2.5-VL-7B",
+        default="etri-vilab/SafeLLaVA-7B",
         metadata={"help": "Path to pretrained model or HuggingFace model ID"},
-    )
-    processor_name: str = field(
-        default="Qwen/Qwen2.5-VL-7B-Instruct",
-        metadata={"help": "Processor/tokenizer to use"},
     )
     trust_remote_code: bool = field(default=True)
 
@@ -62,7 +49,7 @@ class DataArguments:
     data_path: str = field(
         metadata={"help": "Path to unified train_data.json"},
     )
-    max_frames: int = field(default=16)
+    max_frames: int = field(default=8)
     fps: float = field(default=1.0)
     max_length: int = field(default=2048)
 
@@ -84,20 +71,40 @@ class LoRAArguments:
 
 
 class VideoSafetyTrainer(Trainer):
-    """Custom trainer that passes safety_labels to the model."""
+    """Custom trainer that handles SafeLLaVA's forward signature and safety loss."""
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         safety_labels = inputs.pop("safety_labels", None)
-        outputs = model(
-            **inputs,
-            do_safety=True,
-            safety_labels=safety_labels,
-        )
-        loss = outputs.loss
+        image_sizes = inputs.pop("image_sizes", None)
 
-        # Log safety loss separately
-        if outputs.safety_loss is not None and self.state.global_step % 10 == 0:
-            self.log({"safety_loss": outputs.safety_loss.item()})
+        # SafeLLaVA forward signature: images, image_sizes, do_safety
+        outputs = model(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs.get("attention_mask"),
+            labels=inputs.get("labels"),
+            images=inputs.get("images"),
+            image_sizes=image_sizes,
+            do_safety=True,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+
+        loss = outputs.loss if outputs.loss is not None else torch.tensor(0.0, device=inputs["input_ids"].device)
+
+        # Add safety classification loss
+        safety_loss = None
+        if outputs.img_safety_logits is not None and safety_labels is not None:
+            valid_mask = safety_labels != -100
+            if valid_mask.any():
+                safety_loss = F.cross_entropy(
+                    outputs.img_safety_logits[valid_mask],
+                    safety_labels[valid_mask],
+                )
+                safety_lambda = getattr(model.config, "safety_loss_lambda", 1.0)
+                loss = loss + safety_lambda * safety_loss
+
+        if safety_loss is not None and self.state.global_step % 10 == 0:
+            self.log({"safety_loss": safety_loss.item()})
 
         return (loss, outputs) if return_outputs else loss
 
@@ -106,13 +113,11 @@ class VideoSafetyTrainer(Trainer):
         if self.optimizer is not None:
             return self.optimizer
 
-        # Check if we have a separate safety head LR
         safety_head_lr = getattr(self, "_safety_head_lr", None)
 
         if safety_head_lr is None:
             return super().create_optimizer()
 
-        # Separate parameter groups
         safety_head_params = []
         other_params = []
 
@@ -147,54 +152,20 @@ class VideoSafetyTrainer(Trainer):
         return self.optimizer
 
 
-def load_model(model_args: ModelArguments):
-    """Load SafeQwen2.5-VL model with safety head."""
-    config = SafeQwen2_5_VLConfig.from_pretrained(
-        model_args.model_name_or_path,
-        trust_remote_code=model_args.trust_remote_code,
-    )
-
-    model = SafeQwen2_5_VLForConditionalGeneration.from_pretrained(
-        model_args.model_name_or_path,
-        config=config,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=model_args.trust_remote_code,
-        ignore_mismatched_sizes=True,
-    )
-
-    return model
-
-
-def apply_lora(model, lora_args: LoRAArguments):
-    """Apply LoRA adapters to the model.
-
-    Paper setting: vision encoder + visual projection are fully fine-tuned,
-    LLM gets LoRA, and the safety head (VGM) is fully trained.
-    """
-    target_modules = [m.strip() for m in lora_args.lora_target_modules.split(",")]
-
-    lora_config = LoraConfig(
-        r=lora_args.lora_r,
-        lora_alpha=lora_args.lora_alpha,
-        target_modules=target_modules,
-        lora_dropout=lora_args.lora_dropout,
-        bias="none",
-        task_type=TaskType.CAUSAL_LM,
-        modules_to_save=["img_safety_head"],
-    )
-
-    model = get_peft_model(model, lora_config)
-
-    # Unfreeze vision encoder + visual projection (fully fine-tuned per paper)
-    for name, param in model.named_parameters():
-        if "visual" in name:
-            param.requires_grad = True
-
-    model.print_trainable_parameters()
-    return model
+def setup_safellava_imports(model_name_or_path: str):
+    """Add SafeLLaVA's bundled package to Python path."""
+    # If it's a local path, add it so `import safellava` works
+    model_dir = os.path.abspath(model_name_or_path)
+    if os.path.isdir(model_dir):
+        if model_dir not in sys.path:
+            sys.path.insert(0, model_dir)
+        logger.info(f"Added {model_dir} to Python path for safellava imports")
 
 
 def main():
+    # Add training dir to path
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
     parser = HfArgumentParser((ModelArguments, DataArguments, LoRAArguments, TrainingArguments))
 
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -204,16 +175,29 @@ def main():
     else:
         model_args, data_args, lora_args, training_args = parser.parse_args_into_dataclasses()
 
-    # Load processor
-    logger.info(f"Loading processor from {model_args.processor_name}")
-    processor = AutoProcessor.from_pretrained(
-        model_args.processor_name,
+    # Setup safellava imports from model directory
+    setup_safellava_imports(model_args.model_name_or_path)
+
+    # Load tokenizer
+    logger.info(f"Loading tokenizer from {model_args.model_name_or_path}")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path,
+        use_fast=False,
         trust_remote_code=model_args.trust_remote_code,
     )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
-    # Load model
+    # Load model with binary safety head
     logger.info(f"Loading model from {model_args.model_name_or_path}")
-    model = load_model(model_args)
+    from modeling import load_safellava_binary
+    model = load_safellava_binary(model_args.model_name_or_path)
+
+    # Get image processor from the vision tower
+    vision_tower = model.get_vision_tower()
+    if not vision_tower.is_loaded:
+        vision_tower.load_model()
+    image_processor = vision_tower.image_processor
 
     # Enable gradient checkpointing
     if training_args.gradient_checkpointing:
@@ -224,13 +208,36 @@ def main():
     # Apply LoRA
     if lora_args.use_lora:
         logger.info("Applying LoRA adapters")
-        model = apply_lora(model, lora_args)
+        target_modules = [m.strip() for m in lora_args.lora_target_modules.split(",")]
+
+        lora_config = LoraConfig(
+            r=lora_args.lora_r,
+            lora_alpha=lora_args.lora_alpha,
+            target_modules=target_modules,
+            lora_dropout=lora_args.lora_dropout,
+            bias="none",
+            task_type=TaskType.CAUSAL_LM,
+            modules_to_save=["img_safety_head"],
+        )
+
+        model = get_peft_model(model, lora_config)
+
+        # Unfreeze vision tower (per paper)
+        if getattr(model.config, "unfreeze_mm_vision_tower", True):
+            for name, param in model.named_parameters():
+                if "vision_tower" in name or "mm_projector" in name:
+                    param.requires_grad = True
+
+        model.print_trainable_parameters()
 
     # Create dataset
     logger.info(f"Loading dataset from {data_args.data_path}")
+    from dataset import VideoSafetyDataset
     train_dataset = VideoSafetyDataset(
         data_path=data_args.data_path,
-        processor=processor,
+        tokenizer=tokenizer,
+        image_processor=image_processor,
+        model_config=model.config,
         max_frames=data_args.max_frames,
         fps=data_args.fps,
         max_length=data_args.max_length,
@@ -238,8 +245,9 @@ def main():
     logger.info(f"Dataset size: {len(train_dataset)} samples")
 
     # Create collator
+    from collator import VideoSafetyCollator
     collator = VideoSafetyCollator(
-        pad_token_id=processor.tokenizer.pad_token_id or 151643,
+        pad_token_id=tokenizer.pad_token_id or 0,
         max_length=data_args.max_length,
     )
 
@@ -249,10 +257,9 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         data_collator=collator,
-        processing_class=processor.tokenizer,
+        processing_class=tokenizer,
     )
 
-    # Set safety head LR on trainer
     if lora_args.safety_head_lr is not None:
         trainer._safety_head_lr = lora_args.safety_head_lr
 
@@ -265,19 +272,17 @@ def main():
     trainer.save_model()
     trainer.save_state()
 
-    # Save fine-tuned visual encoder weights separately
-    # (LoRA adapter save only covers LLM adapters + modules_to_save)
+    # Save visual encoder weights separately
     if lora_args.use_lora:
         visual_state = {
             k: v.cpu()
             for k, v in trainer.model.named_parameters()
-            if "visual" in k
+            if "vision_tower" in k or "mm_projector" in k
         }
         visual_path = os.path.join(training_args.output_dir, "visual_encoder.bin")
         torch.save(visual_state, visual_path)
         logger.info(f"Saved visual encoder weights ({len(visual_state)} tensors) to {visual_path}")
 
-    # Log metrics
     metrics = train_result.metrics
     trainer.log_metrics("train", metrics)
     trainer.save_metrics("train", metrics)

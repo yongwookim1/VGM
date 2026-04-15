@@ -1,13 +1,14 @@
 """
 VideoSafetyDataset: loads video QA samples and formats them for
-SafeQwen2.5-VL training with safety labels.
+SafeLLaVA-7B training with binary safety labels.
+
+Since LLaVA handles single images, we sample one representative frame
+per video (or optionally multiple frames concatenated).
 """
 
 import json
 import logging
-import math
 import os
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -17,29 +18,8 @@ from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
 
-# Qwen2.5-VL patch size — dimensions must be multiples of this
-_PATCH_FACTOR = 28
-# Max pixels per frame: controls video token budget.
-# 256 * 28^2 ≈ 200K px/frame → ~256 video tokens total for 16 frames
-_MAX_VIDEO_PIXELS = 256 * _PATCH_FACTOR * _PATCH_FACTOR
 
-
-def _resize_frame(img: Image.Image, max_pixels: int = _MAX_VIDEO_PIXELS) -> Image.Image:
-    """Resize a PIL frame so total pixels <= max_pixels with dimensions
-    divisible by _PATCH_FACTOR. This ensures apply_chat_template and the
-    processor compute the same number of video tokens."""
-    w, h = img.size
-    if w * h > max_pixels:
-        scale = math.sqrt(max_pixels / (w * h))
-        w = max(_PATCH_FACTOR, int(w * scale / _PATCH_FACTOR) * _PATCH_FACTOR)
-        h = max(_PATCH_FACTOR, int(h * scale / _PATCH_FACTOR) * _PATCH_FACTOR)
-    else:
-        w = max(_PATCH_FACTOR, round(w / _PATCH_FACTOR) * _PATCH_FACTOR)
-        h = max(_PATCH_FACTOR, round(h / _PATCH_FACTOR) * _PATCH_FACTOR)
-    return img.resize((w, h), Image.BILINEAR)
-
-
-def sample_frames_from_video(video_path: str, max_frames: int = 16,
+def sample_frames_from_video(video_path: str, max_frames: int = 8,
                              fps: float = 1.0) -> list[Image.Image]:
     """Uniformly sample frames from a video file using OpenCV."""
     cap = cv2.VideoCapture(video_path)
@@ -52,13 +32,10 @@ def sample_frames_from_video(video_path: str, max_frames: int = 16,
         video_fps = 30.0
     duration = total_frames / video_fps
 
-    # Calculate how many frames to sample
     num_frames_by_fps = max(1, int(duration * fps))
     num_frames = min(num_frames_by_fps, max_frames)
-    # Must be even (temporal_patch_size=2 in Qwen2.5-VL)
-    num_frames = max(2, num_frames - (num_frames % 2))
+    num_frames = max(1, num_frames)
 
-    # Uniform sampling indices
     indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
 
     frames = []
@@ -69,7 +46,6 @@ def sample_frames_from_video(video_path: str, max_frames: int = 16,
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frames.append(Image.fromarray(frame_rgb))
         else:
-            # Retry with nearest frame
             cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(idx) - 1))
             ret, frame = cap.read()
             if ret:
@@ -81,29 +57,29 @@ def sample_frames_from_video(video_path: str, max_frames: int = 16,
     if len(frames) == 0:
         raise ValueError(f"Could not read any frames from: {video_path}")
 
-    # Ensure even number of frames
-    if len(frames) % 2 != 0:
-        frames = frames[:-1]
-    if len(frames) == 0:
-        raise ValueError(f"Not enough frames after alignment: {video_path}")
-
     return frames
 
 
-class VideoSafetyDataset(Dataset):
-    """Dataset for video safety training with SafeQwen2.5-VL.
+def select_representative_frame(frames: list[Image.Image]) -> Image.Image:
+    """Select the middle frame as the representative frame."""
+    return frames[len(frames) // 2]
 
-    Each sample contains:
-    - Video frames formatted for Qwen2.5-VL processor
-    - Question-answer pair as chat messages
-    - Safety label for the safety classification head
+
+class VideoSafetyDataset(Dataset):
+    """Dataset for video safety training with SafeLLaVA-7B.
+
+    SafeLLaVA processes single images, so we extract a representative
+    frame from each video. The frame is preprocessed using CLIP's
+    image processor via safellava utilities.
     """
 
     def __init__(
         self,
         data_path: str,
-        processor,
-        max_frames: int = 16,
+        tokenizer,
+        image_processor,
+        model_config,
+        max_frames: int = 8,
         fps: float = 1.0,
         max_length: int = 2048,
         skip_missing_videos: bool = True,
@@ -111,13 +87,14 @@ class VideoSafetyDataset(Dataset):
         with open(data_path) as f:
             self.data = json.load(f)
 
-        self.processor = processor
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        self.model_config = model_config
         self.max_frames = max_frames
         self.fps = fps
         self.max_length = max_length
         self.skip_missing_videos = skip_missing_videos
 
-        # Filter out samples with missing videos if requested
         if skip_missing_videos:
             original_len = len(self.data)
             self.data = [
@@ -129,10 +106,16 @@ class VideoSafetyDataset(Dataset):
                     f"missing videos ({len(self.data)} remaining)"
                 )
 
-        # Get special token IDs for label masking and video alignment check
-        self.im_start_id = processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
-        self.im_end_id = processor.tokenizer.convert_tokens_to_ids("<|im_end|>")
-        self.video_pad_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>")
+        # Import SafeLLaVA utilities
+        from safellava.mm_utils import process_images, tokenizer_image_token
+        from safellava.conversation import conv_templates
+        from safellava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
+
+        self._process_images = process_images
+        self._tokenizer_image_token = tokenizer_image_token
+        self._conv_templates = conv_templates
+        self._IMAGE_TOKEN_INDEX = IMAGE_TOKEN_INDEX
+        self._DEFAULT_IMAGE_TOKEN = DEFAULT_IMAGE_TOKEN
         self.ignore_index = -100
 
     def __len__(self):
@@ -149,123 +132,69 @@ class VideoSafetyDataset(Dataset):
             logger.warning(f"Error loading video {sample['video_path']}: {e}")
             return None
 
-        # Resize frames to consistent resolution before apply_chat_template
-        # so token count in text and input_ids always match
-        frames = [_resize_frame(f) for f in frames]
+        # Select representative frame for LLaVA (single image model)
+        image = select_representative_frame(frames)
 
-        # Build chat messages
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "video", "video": frames},
-                    {"type": "text", "text": sample["question"]},
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": sample["answer"]}],
-            },
-        ]
+        # Process image through CLIP processor
+        image_tensor = self._process_images(
+            [image], self.image_processor, self.model_config
+        )
+        if image_tensor.dim() == 4:
+            image_tensor = image_tensor[0]  # [C, H, W]
 
-        # Apply chat template to get full text with special tokens
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False
+        # Build conversation using LLaVA v1 template
+        conv = self._conv_templates["llava_v1"].copy()
+        question = self._DEFAULT_IMAGE_TOKEN + "\n" + sample["question"]
+        conv.append_message(conv.roles[0], question)
+        conv.append_message(conv.roles[1], sample["answer"])
+        prompt = conv.get_prompt()
+
+        # Tokenize with image token handling
+        input_ids = self._tokenizer_image_token(
+            prompt, self.tokenizer, self._IMAGE_TOKEN_INDEX, return_tensors="pt"
         )
 
-        # Process with the Qwen2.5-VL processor
-        # NOTE: do NOT use truncation=True here — truncating at processor level
-        # breaks the video token count consistency check between text and input_ids.
-        # Instead, truncate the resulting tensors manually after processing.
-        inputs = self.processor(
-            text=[text],
-            videos=[frames],
-            padding=False,
-            return_tensors="pt",
-        )
-
-        # Squeeze batch dimension (processor returns [1, seq_len])
-        input_ids = inputs["input_ids"].squeeze(0)
-        attention_mask = inputs["attention_mask"].squeeze(0)
-
-        # Manual truncation after processing.
-        # NOTE: we must NOT truncate video placeholder tokens — the model checks
-        # that the count in input_ids matches the visual feature count from the
-        # vision encoder.  If truncation would remove any <|video_pad|> tokens,
-        # skip this sample (returns None; collator filters None entries).
+        # Truncate if needed
         if input_ids.shape[0] > self.max_length:
-            truncated_ids = input_ids[:self.max_length]
-            n_video_full = (input_ids == self.video_pad_id).sum().item()
-            n_video_trunc = (truncated_ids == self.video_pad_id).sum().item()
-            if n_video_trunc != n_video_full:
-                logger.warning(
-                    f"Skipping sample {idx}: truncation to {self.max_length} would "
-                    f"remove {n_video_full - n_video_trunc} video placeholder tokens "
-                    f"(seq_len={input_ids.shape[0]})"
-                )
-                return None
-            input_ids = truncated_ids
-            attention_mask = attention_mask[:self.max_length]
-        pixel_values_videos = inputs.get("pixel_values_videos")
-        video_grid_thw = inputs.get("video_grid_thw")
+            input_ids = input_ids[:self.max_length]
 
-        # Build labels: mask everything except the assistant's response
+        # Build labels: mask everything except assistant response
         labels = input_ids.clone()
-        labels = self._mask_non_assistant_tokens(labels)
+        labels = self._mask_non_assistant_tokens(labels, prompt)
 
         safety_label = torch.tensor(sample["safety_label"], dtype=torch.long)
 
-        result = {
+        return {
             "input_ids": input_ids,
-            "attention_mask": attention_mask,
             "labels": labels,
+            "image": image_tensor,
+            "image_size": image.size,  # (width, height)
             "safety_labels": safety_label,
         }
-        if pixel_values_videos is not None:
-            result["pixel_values_videos"] = pixel_values_videos.squeeze(0) \
-                if pixel_values_videos.dim() == 3 else pixel_values_videos
-        if video_grid_thw is not None:
-            result["video_grid_thw"] = video_grid_thw
 
-        return result
+    def _mask_non_assistant_tokens(self, labels: torch.Tensor, prompt: str) -> torch.Tensor:
+        """Mask all tokens except the assistant's response.
 
-    def _mask_non_assistant_tokens(self, labels: torch.Tensor) -> torch.Tensor:
-        """Mask all tokens except the assistant's response with -100.
+        LLaVA v1 format:
+        <system> USER: <image>\n<question> ASSISTANT: <answer></s>
 
-        Chat format: <|im_start|>system\n...<|im_end|>\n
-                     <|im_start|>user\n...<|im_end|>\n
-                     <|im_start|>assistant\n RESPONSE <|im_end|>
-
-        We find the last <|im_start|> and unmask from the token after
-        "assistant\n" up to and including the final <|im_end|>.
+        We mask everything up to and including "ASSISTANT: ".
         """
-        im_start_positions = (labels == self.im_start_id).nonzero(as_tuple=True)[0]
-
-        if len(im_start_positions) == 0:
+        # Find "ASSISTANT:" in the prompt and compute its token position
+        assistant_marker = "ASSISTANT:"
+        marker_pos = prompt.rfind(assistant_marker)
+        if marker_pos == -1:
             return labels
 
-        # The last <|im_start|> is the assistant turn
-        last_im_start = im_start_positions[-1].item()
+        # Tokenize up to the marker to find the split point
+        prefix = prompt[:marker_pos + len(assistant_marker)]
+        # Use the image token-aware tokenizer
+        prefix_ids = self._tokenizer_image_token(
+            prefix, self.tokenizer, self._IMAGE_TOKEN_INDEX, return_tensors="pt"
+        )
+        split_point = prefix_ids.shape[0]
 
-        # Mask everything before the assistant response content.
-        # The format after <|im_start|> is: "assistant\n" (several tokens)
-        # We find the response start by looking for the \n after "assistant"
-        # A simpler approach: mask up to last_im_start + offset
-        # "assistant\n" is typically 2 tokens: "assistant" + "\n"
-        # But let's find it precisely by scanning for the first non-special token
-        # after the assistant role marker
-
-        # Find the first \n token after last_im_start (role designation ends at \n)
-        response_start = last_im_start + 1
-        # Skip "assistant" and "\n" tokens (usually positions +1 and +2)
-        # Scan forward to find the newline after role name
-        newline_id = self.processor.tokenizer.convert_tokens_to_ids("\n")
-        for i in range(last_im_start + 1, min(last_im_start + 5, len(labels))):
-            if labels[i].item() == newline_id:
-                response_start = i + 1
-                break
-
-        # Mask everything before response_start
-        labels[:response_start] = self.ignore_index
+        # Mask everything before and including the marker
+        labels[:split_point] = self.ignore_index
 
         return labels
