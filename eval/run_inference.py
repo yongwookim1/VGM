@@ -1,11 +1,12 @@
 """
-Inference script: run fine-tuned SafeLLaVA-7B on the test set and write
+Inference script: run fine-tuned SafeGem-12B on the test set and write
 predictions to a JSON file.
 
 Usage:
     python eval/run_inference.py \
-        --model_path outputs/safellava-video-lora-YYYYMMDD_HHMMSS \
-        --base_model models/SafeLLaVA-7B \
+        --model_path outputs/safegem-video-lora-YYYYMMDD_HHMMSS \
+        --base_model models/SafeGem-12B \
+        --processor_name google/gemma-3-12b-it \
         --test_data training/data/test_data.json \
         --output_file eval/results/predictions.json
 """
@@ -19,10 +20,12 @@ import sys
 import torch
 from peft import PeftModel
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from transformers import AutoProcessor, AutoConfig
 
 # Allow imports from the training package
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "training"))
+from dataset import sample_frames_from_video
+from modeling import SafeGemForConditionalGeneration, SafeGemConfig
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -36,110 +39,115 @@ def find_latest_checkpoint():
         return None
     runs = sorted(
         d for d in os.listdir(OUTPUTS_DIR)
-        if d.startswith("safellava-video-lora-")
+        if d.startswith("safegem-video-lora-")
         and os.path.isdir(os.path.join(OUTPUTS_DIR, d))
     )
     return os.path.join(OUTPUTS_DIR, runs[-1]) if runs else None
 
 
-def load_model_and_tokenizer(args):
-    # Add model dir to path for safellava imports
-    model_dir = os.path.abspath(args.base_model)
-    if os.path.isdir(model_dir) and model_dir not in sys.path:
-        sys.path.insert(0, model_dir)
-
-    from modeling import load_safellava_binary
-
-    logger.info(f"Loading tokenizer from {args.base_model}")
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.base_model, use_fast=False, trust_remote_code=True
+def load_model_and_processor(args):
+    logger.info(f"Loading processor from {args.processor_name}")
+    processor = AutoProcessor.from_pretrained(
+        args.processor_name, trust_remote_code=True
     )
 
     logger.info(f"Loading base model from {args.base_model}")
-    model = load_safellava_binary(args.base_model)
+    original_config = AutoConfig.from_pretrained(
+        args.base_model, trust_remote_code=True
+    )
+    config_dict = original_config.to_dict()
+    config_dict["safety_categories"] = ["safe", "unsafe"]
+    config_dict["num_safety_categories"] = 2
+    config = SafeGemConfig.from_dict(config_dict)
 
-    # Load vision tower
-    vision_tower = model.get_vision_tower()
-    if not vision_tower.is_loaded:
-        vision_tower.load_model()
-    image_processor = vision_tower.image_processor
+    model = SafeGemForConditionalGeneration.from_pretrained(
+        args.base_model,
+        config=config,
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
+        ignore_mismatched_sizes=True,
+    )
 
     if not args.no_lora:
         logger.info(f"Loading LoRA adapter from {args.model_path}")
         model = PeftModel.from_pretrained(model, args.model_path)
         model = model.merge_and_unload()
+    else:
+        logger.info("Skipping LoRA — evaluating base model only")
 
     model.eval()
     model.to(args.device)
     logger.info("Model ready.")
-    return model, tokenizer, image_processor
+    return model, processor
 
 
 @torch.inference_mode()
-def generate_prediction(model, tokenizer, image_processor, sample, args):
-    from dataset import sample_frames_from_video, select_representative_frame
-    from safellava.mm_utils import process_images, tokenizer_image_token
-    from safellava.conversation import conv_templates
-    from safellava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
-
+def generate_prediction(model, processor, sample, args):
+    """Return (text_response, safety_pred) for a single sample."""
     try:
         frames = sample_frames_from_video(
-            sample["video_path"], max_frames=args.max_frames, fps=args.fps
+            sample["video_path"],
+            max_frames=args.max_frames,
+            fps=args.fps,
         )
     except Exception as e:
         logger.warning(f"Cannot load video {sample['video_path']}: {e}")
         return None, None
 
-    image = select_representative_frame(frames)
+    # Build message with frames as images
+    user_content = []
+    for _frame in frames:
+        user_content.append({"type": "image"})
+    user_content.append({"type": "text", "text": sample["question"]})
 
-    image_tensor = process_images([image], image_processor, model.config)
-    image_tensor = image_tensor.to(args.device, dtype=torch.bfloat16)
+    messages = [
+        {"role": "user", "content": user_content},
+    ]
 
-    conv = conv_templates["llava_v1"].copy()
-    question = DEFAULT_IMAGE_TOKEN + "\n" + sample["question"]
-    conv.append_message(conv.roles[0], question)
-    conv.append_message(conv.roles[1], None)
-    prompt = conv.get_prompt()
-
-    input_ids = tokenizer_image_token(
-        prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
-    ).unsqueeze(0).to(args.device)
-
-    # Forward pass for safety classification
-    outputs = model(
-        input_ids=input_ids,
-        images=image_tensor,
-        image_sizes=[image.size],
-        do_safety=True,
-        output_hidden_states=True,
-        return_dict=True,
+    text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
     )
+    inputs = processor(
+        text=[text],
+        images=frames,
+        padding=False,
+        return_tensors="pt",
+    ).to(args.device)
+
+    # Forward pass with safety head
+    outputs = model(**inputs, do_safety=True)
     safety_pred = int(outputs.img_safety_logits.argmax(dim=-1).item()) \
         if outputs.img_safety_logits is not None else None
 
     # Generate text response
     output_ids = model.generate(
-        inputs=input_ids,
-        images=image_tensor,
-        image_sizes=[image.size],
+        **inputs,
         max_new_tokens=args.max_new_tokens,
         do_sample=False,
         temperature=None,
         top_p=None,
     )
 
-    prompt_len = input_ids.shape[1]
+    prompt_len = inputs["input_ids"].shape[1]
     generated_ids = output_ids[0][prompt_len:]
-    prediction = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+    prediction = processor.tokenizer.decode(
+        generated_ids, skip_special_tokens=True
+    ).strip()
     return prediction, safety_pred
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run inference on the test set")
-    parser.add_argument("--model_path", default=None)
-    parser.add_argument("--base_model", default="models/SafeLLaVA-7B")
-    parser.add_argument("--test_data", required=True)
-    parser.add_argument("--output_file", required=True)
+    parser.add_argument("--model_path", default=None,
+                        help="Path to the LoRA adapter directory")
+    parser.add_argument("--base_model", default="etri-vilab/SafeGem-12B",
+                        help="Path to the base SafeGem-12B model")
+    parser.add_argument("--processor_name", default="google/gemma-3-12b-it",
+                        help="Processor/tokenizer to use")
+    parser.add_argument("--test_data", required=True,
+                        help="Path to test_data.json")
+    parser.add_argument("--output_file", required=True,
+                        help="Where to write predictions JSON")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--max_frames", type=int, default=8)
     parser.add_argument("--fps", type=float, default=1.0)
@@ -159,7 +167,7 @@ def main():
 
     with open(args.test_data) as f:
         test_data = json.load(f)
-    logger.info(f"Loaded {len(test_data)} test samples")
+    logger.info(f"Loaded {len(test_data)} test samples from {args.test_data}")
 
     results = []
     done_ids = set()
@@ -169,16 +177,14 @@ def main():
         done_ids = {r["question_id"] for r in results if r.get("question_id") is not None}
         logger.info(f"Resuming: {len(done_ids)} samples already done")
 
-    model, tokenizer, image_processor = load_model_and_tokenizer(args)
+    model, processor = load_model_and_processor(args)
 
     for sample in tqdm(test_data, desc="Inference"):
         qid = sample.get("question_id")
         if qid is not None and qid in done_ids:
             continue
 
-        prediction, safety_pred = generate_prediction(
-            model, tokenizer, image_processor, sample, args
-        )
+        prediction, safety_pred = generate_prediction(model, processor, sample, args)
         result = dict(sample)
         result["prediction"] = prediction if prediction is not None else ""
         result["safety_pred"] = safety_pred
