@@ -194,8 +194,8 @@ cython_debug/
 .cursorindexingignore
 
 # Data, models & outputs
-data/
-training/data/
-models/
-outputs/
-results/
+/data/
+/training/data/
+/models/
+/outputs/
+/results/
