@@ -66,6 +66,7 @@ if [[ -z "${STAGE}" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 OUTPUTS_DIR="${REPO_ROOT}/outputs"
 RESULTS_DIR="${RESULTS_DIR:-${REPO_ROOT}/results}"
 DATA_PATH="${DATA_PATH:-${REPO_ROOT}/data/processed/train_data.json}"
@@ -118,7 +119,7 @@ train_safegem() {
     num_gpus="$(count_gpus)"
     local master_port="${MASTER_PORT:-29500}"
     local model_name="${MODEL_NAME:-${REPO_ROOT}/models/SafeGem-12B}"
-    local processor_name="${PROCESSOR_NAME:-${model_name}}"
+    local processor_name="${PROCESSOR_NAME:-${REPO_ROOT}/models/gemma-3-12b-it}"
     local ds_config="${DS_CONFIG:-${REPO_ROOT}/configs/deepspeed_zero2.json}"
     local output_dir="${OUTPUT_DIR:-${OUTPUTS_DIR}/safegem-video-lora-${TIMESTAMP}}"
     local epochs="${NUM_TRAIN_EPOCHS:-7}"
@@ -246,6 +247,7 @@ train_safellava() {
 
 eval_safegem() {
     local base_model="${BASE_MODEL:-${REPO_ROOT}/models/SafeGem-12B}"
+    local processor_name="${PROCESSOR_NAME:-${REPO_ROOT}/models/gemma-3-12b-it}"
     local model_path="${MODEL_PATH:-}"
     if [[ -z "${model_path}" ]]; then
         model_path="$(latest_checkpoint safegem-video-lora)"
@@ -262,7 +264,7 @@ eval_safegem() {
     python3 -m src.eval.run_inference_safegem \
         --model_path "${model_path}" \
         --base_model "${base_model}" \
-        --processor_name "${PROCESSOR_NAME:-${base_model}}" \
+        --processor_name "${processor_name}" \
         --test_data "${TEST_DATA}" \
         --output_file "${predictions}" \
         --max_frames "${MAX_FRAMES:-8}" \

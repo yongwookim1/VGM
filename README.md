@@ -108,6 +108,7 @@ bash run_pipeline.sh --stage prepare
 
 ```bash
 MODEL_NAME=./models/SafeGem-12B \
+PROCESSOR_NAME=./models/gemma-3-12b-it \
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash run_pipeline.sh --model safegem --stage train
 ```
@@ -117,6 +118,7 @@ bash run_pipeline.sh --model safegem --stage train
 ```bash
 MODEL_PATH=./outputs/safegem-video-lora-YYYYMMDD_HHMMSS \
 BASE_MODEL=./models/SafeGem-12B \
+PROCESSOR_NAME=./models/gemma-3-12b-it \
 bash run_pipeline.sh --model safegem --stage eval
 ```
 
@@ -124,6 +126,7 @@ bash run_pipeline.sh --model safegem --stage eval
 
 ```bash
 MODEL_NAME=./models/SafeGem-12B \
+PROCESSOR_NAME=./models/gemma-3-12b-it \
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash run_pipeline.sh --model safegem --stage all
 ```
