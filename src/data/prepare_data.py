@@ -118,7 +118,11 @@ def build_safe_answer() -> str:
 
 
 def load_safetybench(data_dir: str) -> list[dict]:
-    """Load Video-SafetyBench harmful/benign splits with a binary label contract."""
+    """Load Video-SafetyBench harmful/benign splits.
+
+    In this training setup, all Video-SafetyBench samples are treated as unsafe.
+    The split names are preserved for analysis, but both map to label 1.
+    """
     samples = []
 
     for split_type in ("harmful", "benign"):
@@ -134,16 +138,8 @@ def load_safetybench(data_dir: str) -> list[dict]:
             video_path = os.path.join(data_dir, item["video_path"])
             category = item.get("category", "")
             subcategory = item.get("subcategory", "")
-            safety_label = infer_binary_label(
-                split=split_type,
-                category=category,
-                subcategory=subcategory,
-            )
-            answer = (
-                build_refusal_answer(subcategory)
-                if safety_label == UNSAFE_LABEL
-                else build_safe_answer()
-            )
+            safety_label = UNSAFE_LABEL
+            answer = build_refusal_answer(subcategory)
             samples.append(
                 {
                     "dataset": "videosafetybench",
