@@ -6,7 +6,7 @@ from src.common.collator import SafeGemVideoCollator
 
 
 class SafeGemCollatorTest(unittest.TestCase):
-    def test_stacks_multiframe_pixel_values_with_batch_dimension(self):
+    def test_flattens_multiframe_pixel_values_across_batch(self):
         collator = SafeGemVideoCollator(pad_token_id=0, ignore_index=-100, max_length=16)
         batch = [
             {
@@ -29,7 +29,7 @@ class SafeGemCollatorTest(unittest.TestCase):
 
         output = collator(batch)
 
-        self.assertEqual(output["pixel_values"].shape, (2, 4, 3, 8, 8))
+        self.assertEqual(output["pixel_values"].shape, (8, 3, 8, 8))
         self.assertEqual(output["num_frames_per_sample"].tolist(), [4, 4])
 
 

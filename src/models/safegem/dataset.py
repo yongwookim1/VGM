@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 
 from src.common.io import load_json
 from src.data.video_utils import sample_frames_from_video
+from src.models.safegem.preprocess import prepare_safegem_inputs, resolve_safegem_max_length
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class VideoSafetyDataset(Dataset):
         self.processor = processor
         self.max_frames = max_frames
         self.fps = fps
-        self.max_length = max_length
+        self.max_length = resolve_safegem_max_length(processor, max_length)
         self.ignore_index = -100
 
         if skip_missing_videos:
@@ -54,33 +55,20 @@ class VideoSafetyDataset(Dataset):
             logger.warning("Error loading video %s: %s", sample["video_path"], exc)
             return None
 
-        if len(frames) < self.max_frames:
-            frames = frames + [frames[-1].copy() for _ in range(self.max_frames - len(frames))]
-
-        user_content = [{"type": "image"} for _ in frames]
-        user_content.append({"type": "text", "text": sample["question"]})
-        messages = [
-            {"role": "user", "content": user_content},
-            {"role": "assistant", "content": [{"type": "text", "text": sample["answer"]}]},
-        ]
-        text = self.processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=False,
-        )
-
-        inputs = self.processor(
-            text=[text],
-            images=frames,
-            padding=False,
-            return_tensors="pt",
-        )
+        try:
+            frames, inputs, _, _ = prepare_safegem_inputs(
+                self.processor,
+                sample,
+                frames,
+                max_length=self.max_length,
+                include_answer=True,
+            )
+        except Exception as exc:
+            logger.warning("Error tokenizing sample %s: %s", sample.get("question_id", idx), exc)
+            return None
 
         input_ids = inputs["input_ids"].squeeze(0)
         attention_mask = inputs["attention_mask"].squeeze(0)
-        if input_ids.shape[0] > self.max_length:
-            input_ids = input_ids[: self.max_length]
-            attention_mask = attention_mask[: self.max_length]
 
         labels = self._mask_non_assistant_tokens(input_ids.clone())
         result = {

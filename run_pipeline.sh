@@ -280,15 +280,16 @@ eval_safegem() {
     if [[ "${benchmark}" == "safety" || "${benchmark}" == "all" ]]; then
         local predictions="${PREDICTIONS:-${RESULTS_DIR}/${run_name}_predictions.json}"
 
-        python3 -m src.eval.run_inference_safegem \
-            --model_path "${model_path}" \
-            --base_model "${base_model}" \
-            --processor_name "${processor_name}" \
-            --test_data "${TEST_DATA}" \
-            --output_file "${predictions}" \
-            --max_frames "${MAX_FRAMES:-8}" \
-            --fps "${FPS:-1.0}" \
-            --max_new_tokens "${MAX_NEW_TOKENS:-512}"
+    python3 -m src.eval.run_inference_safegem \
+        --model_path "${model_path}" \
+        --base_model "${base_model}" \
+        --processor_name "${processor_name}" \
+        --test_data "${TEST_DATA}" \
+        --output_file "${predictions}" \
+        --max_frames "${MAX_FRAMES:-8}" \
+        --fps "${FPS:-1.0}" \
+        --max_length "${MAX_LENGTH:-8192}" \
+        --max_new_tokens "${MAX_NEW_TOKENS:-512}"
 
         python3 -m src.eval.eval_f1 "${predictions}"
     fi

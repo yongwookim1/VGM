@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ModelArguments:
     model_name_or_path: str = field(default="models/SafeGem-12B")
-    processor_name: str = field(default="models/gemma-3-12b-it")
+    processor_name: str = field(default="models/SafeGem-12B")
     trust_remote_code: bool = field(default=True)
 
 

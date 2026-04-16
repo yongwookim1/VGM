@@ -14,6 +14,7 @@ from transformers import AutoProcessor
 from src.common.io import load_json, write_json
 from src.data.video_utils import sample_frames_from_video
 from src.models.safegem.modeling import load_safegem
+from src.models.safegem.preprocess import prepare_safegem_inputs
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -71,20 +72,18 @@ def generate_prediction(model, processor, sample, args):
         logger.warning("Cannot load video %s: %s", sample["video_path"], exc)
         return None, None
 
-    user_content = [{"type": "image"} for _ in frames]
-    user_content.append({"type": "text", "text": sample["question"]})
-    messages = [{"role": "user", "content": user_content}]
-    text = processor.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    inputs = processor(
-        text=[text],
-        images=frames,
-        padding=False,
-        return_tensors="pt",
-    ).to(args.device)
+    try:
+        frames, inputs, _, _ = prepare_safegem_inputs(
+            processor,
+            sample,
+            frames,
+            max_length=args.max_length,
+            include_answer=False,
+        )
+    except Exception as exc:
+        logger.warning("Cannot tokenize sample %s: %s", sample.get("question_id"), exc)
+        return None, None
+    inputs = inputs.to(args.device)
 
     outputs = model(
         **inputs,
@@ -120,6 +119,7 @@ def main() -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--max_frames", type=int, default=8)
     parser.add_argument("--fps", type=float, default=1.0)
+    parser.add_argument("--max_length", type=int, default=8192)
     parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--no_lora", action="store_true")
     parser.add_argument("--resume", action="store_true")

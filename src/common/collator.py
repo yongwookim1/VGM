@@ -47,7 +47,7 @@ class SafeGemVideoCollator:
         if pixel_values:
             first = pixel_values[0]
             if first.dim() == 4:
-                result["pixel_values"] = torch.stack(pixel_values, dim=0)
+                result["pixel_values"] = torch.cat(pixel_values, dim=0)
             elif first.dim() == 5:
                 result["pixel_values"] = torch.cat(pixel_values, dim=0)
             else:
