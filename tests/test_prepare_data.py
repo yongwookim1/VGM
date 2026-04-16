@@ -3,10 +3,22 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.data.prepare_data import load_safewatch
+from src.data.prepare_data import derive_test_output_path, load_safewatch
 
 
 class PrepareDataTest(unittest.TestCase):
+    def test_derive_test_output_path_from_default_name(self):
+        self.assertEqual(
+            derive_test_output_path("data/processed/train_data.json"),
+            Path("data/processed/test_data.json"),
+        )
+
+    def test_derive_test_output_path_from_custom_name(self):
+        self.assertEqual(
+            derive_test_output_path("data/processed/custom.json"),
+            Path("data/processed/custom_test.json"),
+        )
+
     def test_load_safewatch_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

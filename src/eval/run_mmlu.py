@@ -311,7 +311,7 @@ def compute_accuracy(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run MMLU evaluation on a local dataset copy")
-    parser.add_argument("--model_type", required=True, choices=["safegem", "safellava"])
+    parser.add_argument("--model_type", required=True, choices=["safegem", "safeqwen", "safellava"])
     parser.add_argument("--base_model", required=True)
     parser.add_argument("--mmlu_path", required=True)
     parser.add_argument("--split", default="test")

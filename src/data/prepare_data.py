@@ -60,6 +60,13 @@ def load_json_or_jsonl(path: str | Path) -> list[dict]:
     raise ValueError(f"Unsupported manifest structure: {path}")
 
 
+def derive_test_output_path(output_path: str | Path) -> Path:
+    output_path = Path(output_path)
+    if "train_data" in output_path.name:
+        return output_path.with_name(output_path.name.replace("train_data", "test_data"))
+    return output_path.with_name(f"{output_path.stem}_test{output_path.suffix}")
+
+
 def load_videochatgpt(data_dir: str) -> list[dict]:
     """Load VideoChatGPT splits from the standard release layout."""
     video_dir = os.path.join(data_dir, "Test_Videos")
@@ -342,7 +349,7 @@ def main() -> None:
     print(f"\nSaved {len(train_samples)} train samples to {output_path}")
 
     if test_samples:
-        test_path = output_path.with_name(output_path.name.replace("train_data", "test_data"))
+        test_path = derive_test_output_path(output_path)
         write_json(test_path, test_samples)
         print(f"Saved {len(test_samples)} test samples to {test_path}")
 
