@@ -106,6 +106,30 @@ class SafeGemForConditionalGeneration(Gemma3ForConditionalGeneration):
                 return pooled_per_image.mean(dim=1)
         return None
 
+    def _pool_visual_features_per_sample(
+        self,
+        visual_features: Optional[torch.Tensor],
+        num_frames_per_sample: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        if visual_features is None or num_frames_per_sample is None:
+            return visual_features
+
+        frame_counts = [int(count) for count in num_frames_per_sample.tolist()]
+        if visual_features.shape[0] == len(frame_counts):
+            return visual_features
+        if sum(frame_counts) != visual_features.shape[0]:
+            raise ValueError(
+                "Visual feature count does not match the provided frame counts: "
+                f"features={visual_features.shape[0]}, counts={frame_counts}"
+            )
+
+        pooled = []
+        start = 0
+        for count in frame_counts:
+            pooled.append(visual_features[start : start + count].mean(dim=0))
+            start += count
+        return torch.stack(pooled, dim=0)
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -121,6 +145,7 @@ class SafeGemForConditionalGeneration(Gemma3ForConditionalGeneration):
         return_dict: Optional[bool] = None,
         do_safety: bool = True,
         safety_labels: Optional[torch.LongTensor] = None,
+        num_frames_per_sample: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Union[Tuple, SafeVLOutput]:
         if do_safety and self.img_safety_head is not None and past_key_values is None:
@@ -156,6 +181,10 @@ class SafeGemForConditionalGeneration(Gemma3ForConditionalGeneration):
         if should_do_safety:
             image_hidden_states = getattr(outputs, "image_hidden_states", None)
             visual_features = self._extract_image_features_pooling(image_hidden_states)
+            visual_features = self._pool_visual_features_per_sample(
+                visual_features,
+                num_frames_per_sample,
+            )
             if visual_features is not None:
                 img_safety_logits = self.img_safety_head(visual_features)
                 img_safety_probs = torch.softmax(img_safety_logits, dim=-1)

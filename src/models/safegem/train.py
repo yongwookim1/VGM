@@ -31,7 +31,7 @@ class DataArguments:
     data_path: str = field(default="data/processed/train_data.json")
     max_frames: int = field(default=8)
     fps: float = field(default=1.0)
-    max_length: int = field(default=2048)
+    max_length: int = field(default=8192)
 
 
 @dataclass

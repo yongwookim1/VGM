@@ -23,7 +23,7 @@ class VideoSafetyDataset(Dataset):
         processor,
         max_frames: int = 8,
         fps: float = 1.0,
-        max_length: int = 2048,
+        max_length: int = 8192,
         skip_missing_videos: bool = True,
     ):
         self.data = load_json(data_path)
@@ -85,6 +85,7 @@ class VideoSafetyDataset(Dataset):
             "attention_mask": attention_mask,
             "labels": labels,
             "safety_labels": torch.tensor(sample["safety_label"], dtype=torch.long),
+            "num_frames": torch.tensor(len(frames), dtype=torch.long),
         }
         pixel_values = inputs.get("pixel_values")
         if pixel_values is not None:

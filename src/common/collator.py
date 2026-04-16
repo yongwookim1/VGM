@@ -41,6 +41,7 @@ class SafeGemVideoCollator:
             "attention_mask": attention_mask,
             "labels": labels,
             "safety_labels": torch.stack([sample["safety_labels"] for sample in batch]),
+            "num_frames_per_sample": torch.stack([sample["num_frames"] for sample in batch]),
         }
         pixel_values = [sample["pixel_values"] for sample in batch if "pixel_values" in sample]
         if pixel_values:

@@ -145,7 +145,7 @@ train_safegem() {
         --data_path "${DATA_PATH}" \
         --max_frames "${MAX_FRAMES:-8}" \
         --fps "${FPS:-1.0}" \
-        --max_length "${MAX_LENGTH:-2048}" \
+        --max_length "${MAX_LENGTH:-8192}" \
         --use_lora True \
         --lora_r "${LORA_R:-64}" \
         --lora_alpha "${LORA_ALPHA:-64}" \

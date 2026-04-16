@@ -86,7 +86,11 @@ def generate_prediction(model, processor, sample, args):
         return_tensors="pt",
     ).to(args.device)
 
-    outputs = model(**inputs, do_safety=True)
+    outputs = model(
+        **inputs,
+        do_safety=True,
+        num_frames_per_sample=torch.tensor([len(frames)], device=args.device),
+    )
     safety_pred = (
         int(outputs.img_safety_logits.argmax(dim=-1).item())
         if getattr(outputs, "img_safety_logits", None) is not None
