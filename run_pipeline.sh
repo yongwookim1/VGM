@@ -4,16 +4,16 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  bash run_pipeline.sh --stage prepare [--prepare-first]
+  bash run_pipeline.sh --stage prepare
+  bash run_pipeline.sh --model safegem --stage check
   bash run_pipeline.sh --model safegem --stage train
   bash run_pipeline.sh --model safellava --stage eval
-  bash run_pipeline.sh --model safegem --stage all [--prepare-first]
+  bash run_pipeline.sh --model safegem --stage all
 
 Options:
   --model           safegem | safellava | guardreasoner
-  --stage           prepare | train | eval | all
-  --benchmark       safety | mmlu | all (default: safety)
-  --prepare-first   Run data preparation before train/all
+  --stage           prepare | check | train | eval | all
+  --benchmark       safety | mmlu | all (default: all)
   -h, --help        Show this message
 
 Environment variables:
@@ -33,8 +33,7 @@ EOF
 
 MODEL_TYPE=""
 STAGE=""
-BENCHMARK="safety"
-PREPARE_FIRST=0
+BENCHMARK="all"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -49,10 +48,6 @@ while [[ $# -gt 0 ]]; do
         --benchmark)
             BENCHMARK="$2"
             shift 2
-            ;;
-        --prepare-first)
-            PREPARE_FIRST=1
-            shift
             ;;
         -h|--help)
             usage
@@ -99,6 +94,33 @@ ensure_model_required() {
     fi
 }
 
+require_path() {
+    local label="$1"
+    local path="$2"
+    if [[ ! -e "${path}" ]]; then
+        echo "ERROR: ${label} not found: ${path}" >&2
+        exit 1
+    fi
+}
+
+require_file() {
+    local label="$1"
+    local path="$2"
+    if [[ ! -f "${path}" ]]; then
+        echo "ERROR: ${label} file not found: ${path}" >&2
+        exit 1
+    fi
+}
+
+require_dir() {
+    local label="$1"
+    local path="$2"
+    if [[ ! -d "${path}" ]]; then
+        echo "ERROR: ${label} directory not found: ${path}" >&2
+        exit 1
+    fi
+}
+
 count_gpus() {
     local cuda_visible_devices="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
     IFS=',' read -ra GPU_ARRAY <<< "${cuda_visible_devices}"
@@ -108,6 +130,172 @@ count_gpus() {
 latest_checkpoint() {
     local prefix="$1"
     ls -dt "${OUTPUTS_DIR}/${prefix}"-* 2>/dev/null | head -1
+}
+
+compute_grad_accum() {
+    local global_batch_size="$1"
+    local per_device_bs="$2"
+    local num_gpus="$3"
+    local denom=$((per_device_bs * num_gpus))
+    if (( denom <= 0 )); then
+        echo "ERROR: invalid batch configuration: per_device_bs=${per_device_bs}, num_gpus=${num_gpus}" >&2
+        exit 1
+    fi
+
+    local grad_accum=$(((global_batch_size + denom - 1) / denom))
+    if (( global_batch_size % denom != 0 )); then
+        echo "WARNING: GLOBAL_BATCH_SIZE=${global_batch_size} is not divisible by PER_DEVICE_BS*num_gpus=${denom}; using gradient_accumulation_steps=${grad_accum}." >&2
+    fi
+    echo "${grad_accum}"
+}
+
+ensure_mmlu_path() {
+    local mmlu_path="${1}"
+    if [[ ! -e "${mmlu_path}" ]]; then
+        echo "ERROR: MMLU path not found: ${mmlu_path}" >&2
+        echo "Set MMLU_PATH or disable MMLU with --benchmark safety." >&2
+        exit 1
+    fi
+}
+
+ensure_safellava_pythonpath() {
+    local root="$1"
+    require_dir "SafeLLaVA code path" "${root}"
+    require_file "SafeLLaVA module" "${root}/safellava/constants.py"
+    require_file "SafeLLaVA module" "${root}/safellava/conversation.py"
+    require_file "SafeLLaVA module" "${root}/safellava/mm_utils.py"
+}
+
+has_prepare_inputs() {
+    [[ -n "${VIDEOCHATGPT_DIR:-}" || -n "${SAFETYBENCH_DIR:-}" || -n "${SAFEWATCH_DIR:-}" || -n "${SAFEWATCH_MANIFEST:-}" ]]
+}
+
+ensure_data_or_prepare_inputs() {
+    local label="$1"
+    local file_path="$2"
+    if [[ -f "${file_path}" ]]; then
+        return 0
+    fi
+    if has_prepare_inputs; then
+        return 0
+    fi
+    echo "ERROR: ${label} not found: ${file_path}" >&2
+    echo "Provide processed data or set raw dataset paths for preparation." >&2
+    exit 1
+}
+
+preflight_prepare() {
+    if [[ -z "${VIDEOCHATGPT_DIR:-}" && -z "${SAFETYBENCH_DIR:-}" && -z "${SAFEWATCH_DIR:-}" && -z "${SAFEWATCH_MANIFEST:-}" ]]; then
+        echo "ERROR: prepare stage requires at least one data source: VIDEOCHATGPT_DIR, SAFETYBENCH_DIR, SAFEWATCH_DIR, or SAFEWATCH_MANIFEST." >&2
+        exit 1
+    fi
+    if [[ -n "${VIDEOCHATGPT_DIR:-}" ]]; then
+        require_dir "VideoChatGPT directory" "${VIDEOCHATGPT_DIR}"
+    fi
+    if [[ -n "${SAFETYBENCH_DIR:-}" ]]; then
+        require_dir "Video-SafetyBench directory" "${SAFETYBENCH_DIR}"
+    fi
+    if [[ -n "${SAFEWATCH_DIR:-}" ]]; then
+        require_dir "SafeWatch directory" "${SAFEWATCH_DIR}"
+    fi
+    if [[ -n "${SAFEWATCH_MANIFEST:-}" ]]; then
+        require_file "SafeWatch manifest" "${SAFEWATCH_MANIFEST}"
+    fi
+}
+
+preflight_train_safegem() {
+    local model_name="${MODEL_NAME:-${REPO_ROOT}/models/SafeGem-12B}"
+    local processor_name="${PROCESSOR_NAME:-${model_name}}"
+    local ds_config="${DS_CONFIG:-${REPO_ROOT}/configs/deepspeed_zero2.json}"
+    require_dir "SafeGem model" "${model_name}"
+    require_dir "SafeGem processor" "${processor_name}"
+    require_file "DeepSpeed config" "${ds_config}"
+    ensure_data_or_prepare_inputs "Training data" "${DATA_PATH}"
+}
+
+preflight_eval_safegem() {
+    local base_model="${BASE_MODEL:-${REPO_ROOT}/models/SafeGem-12B}"
+    local processor_name="${PROCESSOR_NAME:-${REPO_ROOT}/models/SafeGem-12B}"
+    require_dir "SafeGem base model" "${base_model}"
+    require_dir "SafeGem processor" "${processor_name}"
+    if [[ "${BENCHMARK}" == "safety" || "${BENCHMARK}" == "all" ]]; then
+        ensure_data_or_prepare_inputs "Test data" "${TEST_DATA}"
+    fi
+    if [[ "${BENCHMARK}" == "mmlu" || "${BENCHMARK}" == "all" ]]; then
+        ensure_mmlu_path "${MMLU_PATH:-${REPO_ROOT}/data/mmlu}"
+    fi
+    local model_path="${MODEL_PATH:-}"
+    if [[ -z "${model_path}" ]]; then
+        model_path="$(latest_checkpoint safegem-video-lora)"
+    fi
+    if [[ -n "${model_path}" ]]; then
+        require_dir "SafeGem checkpoint" "${model_path}"
+    else
+        echo "NOTE: SafeGem checkpoint not found yet; eval output validation skipped." >&2
+    fi
+}
+
+preflight_train_safellava() {
+    local model_name="${MODEL_NAME:-${REPO_ROOT}/models/SafeLLaVA-7B}"
+    local safellava_pythonpath="${SAFELLAVA_PYTHONPATH:-${model_name}}"
+    local ds_config="${DS_CONFIG:-${REPO_ROOT}/configs/deepspeed_zero2.json}"
+    require_dir "SafeLLaVA model" "${model_name}"
+    ensure_safellava_pythonpath "${safellava_pythonpath}"
+    require_file "DeepSpeed config" "${ds_config}"
+    ensure_data_or_prepare_inputs "Training data" "${DATA_PATH}"
+}
+
+preflight_eval_safellava() {
+    local base_model="${BASE_MODEL:-${REPO_ROOT}/models/SafeLLaVA-7B}"
+    local safellava_pythonpath="${SAFELLAVA_PYTHONPATH:-${base_model}}"
+    require_dir "SafeLLaVA base model" "${base_model}"
+    ensure_safellava_pythonpath "${safellava_pythonpath}"
+    if [[ "${BENCHMARK}" == "safety" || "${BENCHMARK}" == "all" ]]; then
+        ensure_data_or_prepare_inputs "Test data" "${TEST_DATA}"
+    fi
+    if [[ "${BENCHMARK}" == "mmlu" || "${BENCHMARK}" == "all" ]]; then
+        ensure_mmlu_path "${MMLU_PATH:-${REPO_ROOT}/data/mmlu}"
+    fi
+    local model_path="${MODEL_PATH:-}"
+    if [[ -z "${model_path}" ]]; then
+        model_path="$(latest_checkpoint safellava-video-lora)"
+    fi
+    if [[ -n "${model_path}" ]]; then
+        require_dir "SafeLLaVA checkpoint" "${model_path}"
+    else
+        echo "NOTE: SafeLLaVA checkpoint not found yet; eval output validation skipped." >&2
+    fi
+}
+
+preflight_guardreasoner() {
+    local model_path="${MODEL_PATH:-${REPO_ROOT}/models/GuardReasoner-VL-3B}"
+    require_dir "GuardReasoner model" "${model_path}"
+    require_file "Test data" "${TEST_DATA}"
+}
+
+run_preflight() {
+    case "${MODEL_TYPE}" in
+        safegem)
+            preflight_train_safegem
+            preflight_eval_safegem
+            ;;
+        safellava)
+            preflight_train_safellava
+            preflight_eval_safellava
+            ;;
+        guardreasoner)
+            if [[ "${BENCHMARK}" != "safety" ]]; then
+                echo "ERROR: guardreasoner only supports the safety benchmark" >&2
+                exit 1
+            fi
+            preflight_guardreasoner
+            ;;
+        *)
+            echo "ERROR: unsupported model '${MODEL_TYPE}' for check" >&2
+            exit 1
+            ;;
+    esac
+    echo "Preflight checks passed for model=${MODEL_TYPE}, benchmark=${BENCHMARK}."
 }
 
 run_prepare() {
@@ -135,13 +323,14 @@ train_safegem() {
     num_gpus="$(count_gpus)"
     local master_port="${MASTER_PORT:-29500}"
     local model_name="${MODEL_NAME:-${REPO_ROOT}/models/SafeGem-12B}"
-    local processor_name="${PROCESSOR_NAME:-${REPO_ROOT}/models/gemma-3-12b-it}"
+    local processor_name="${PROCESSOR_NAME:-${model_name}}"
     local ds_config="${DS_CONFIG:-${REPO_ROOT}/configs/deepspeed_zero2.json}"
     local output_dir="${OUTPUT_DIR:-${OUTPUTS_DIR}/safegem-video-lora-${TIMESTAMP}}"
     local epochs="${NUM_TRAIN_EPOCHS:-7}"
     local global_batch_size="${GLOBAL_BATCH_SIZE:-128}"
     local per_device_bs="${PER_DEVICE_BS:-2}"
-    local grad_accum=$((global_batch_size / (per_device_bs * num_gpus)))
+    local grad_accum
+    grad_accum="$(compute_grad_accum "${global_batch_size}" "${per_device_bs}" "${num_gpus}")"
 
     mkdir -p "${output_dir}"
     export TOKENIZERS_PARALLELISM=false
@@ -183,7 +372,7 @@ train_safegem() {
         --logging_dir "${output_dir}/runs" \
         --save_strategy "${SAVE_STRATEGY:-epoch}" \
         --save_total_limit "${SAVE_TOTAL_LIMIT:-3}" \
-        --dataloader_num_workers "${DATALOADER_NUM_WORKERS:-4}" \
+        --dataloader_num_workers "${DATALOADER_NUM_WORKERS:-0}" \
         --remove_unused_columns False \
         --ddp_find_unused_parameters False \
         --report_to "${REPORT_TO:-tensorboard}" \
@@ -198,6 +387,7 @@ train_safellava() {
     num_gpus="$(count_gpus)"
     local master_port="${MASTER_PORT:-29501}"
     local model_name="${MODEL_NAME:-${REPO_ROOT}/models/SafeLLaVA-7B}"
+    local safellava_pythonpath="${SAFELLAVA_PYTHONPATH:-${model_name}}"
     local ds_config="${DS_CONFIG:-${REPO_ROOT}/configs/deepspeed_zero2.json}"
     local output_dir="${OUTPUT_DIR:-${OUTPUTS_DIR}/safellava-video-lora-${TIMESTAMP}}"
     local default_epochs
@@ -210,7 +400,8 @@ train_safellava() {
     fi
     local global_batch_size="${GLOBAL_BATCH_SIZE:-128}"
     local per_device_bs="${PER_DEVICE_BS:-2}"
-    local grad_accum=$((global_batch_size / (per_device_bs * num_gpus)))
+    local grad_accum
+    grad_accum="$(compute_grad_accum "${global_batch_size}" "${per_device_bs}" "${num_gpus}")"
 
     mkdir -p "${output_dir}"
     export TOKENIZERS_PARALLELISM=false
@@ -226,7 +417,7 @@ train_safellava() {
         --deepspeed "${ds_config}" \
         --model_name_or_path "${model_name}" \
         --trust_remote_code True \
-        --safellava_pythonpath "${SAFELLAVA_PYTHONPATH:-}" \
+        --safellava_pythonpath "${safellava_pythonpath}" \
         --data_path "${DATA_PATH}" \
         --max_frames "${MAX_FRAMES:-8}" \
         --fps "${FPS:-1.0}" \
@@ -252,7 +443,7 @@ train_safellava() {
         --logging_dir "${output_dir}/runs" \
         --save_strategy "${SAVE_STRATEGY:-epoch}" \
         --save_total_limit "${SAVE_TOTAL_LIMIT:-3}" \
-        --dataloader_num_workers "${DATALOADER_NUM_WORKERS:-4}" \
+        --dataloader_num_workers "${DATALOADER_NUM_WORKERS:-0}" \
         --remove_unused_columns False \
         --ddp_find_unused_parameters False \
         --report_to "${REPORT_TO:-tensorboard}" \
@@ -299,6 +490,7 @@ eval_safegem() {
         local mmlu_predictions="${MMLU_PREDICTIONS:-${RESULTS_DIR}/${run_name}_mmlu_predictions.json}"
         local mmlu_metrics="${MMLU_METRICS:-${RESULTS_DIR}/${run_name}_mmlu_metrics.json}"
 
+        ensure_mmlu_path "${mmlu_path}"
         python3 -m src.eval.run_mmlu \
             --model_type safegem \
             --model_path "${model_path}" \
@@ -314,6 +506,7 @@ eval_safegem() {
 
 eval_safellava() {
     local base_model="${BASE_MODEL:-${REPO_ROOT}/models/SafeLLaVA-7B}"
+    local safellava_pythonpath="${SAFELLAVA_PYTHONPATH:-${base_model}}"
     local model_path="${MODEL_PATH:-}"
     if [[ -z "${model_path}" ]]; then
         model_path="$(latest_checkpoint safellava-video-lora)"
@@ -338,7 +531,7 @@ eval_safellava() {
             --max_frames "${MAX_FRAMES:-8}" \
             --fps "${FPS:-1.0}" \
             --max_new_tokens "${MAX_NEW_TOKENS:-512}" \
-            --safellava_pythonpath "${SAFELLAVA_PYTHONPATH:-}"
+            --safellava_pythonpath "${safellava_pythonpath}"
 
         python3 -m src.eval.eval_f1 "${predictions}"
     fi
@@ -348,6 +541,7 @@ eval_safellava() {
         local mmlu_predictions="${MMLU_PREDICTIONS:-${RESULTS_DIR}/${run_name}_mmlu_predictions.json}"
         local mmlu_metrics="${MMLU_METRICS:-${RESULTS_DIR}/${run_name}_mmlu_metrics.json}"
 
+        ensure_mmlu_path "${mmlu_path}"
         python3 -m src.eval.run_mmlu \
             --model_type safellava \
             --model_path "${model_path}" \
@@ -357,7 +551,8 @@ eval_safellava() {
             --output_file "${mmlu_predictions}" \
             --metrics_file "${mmlu_metrics}" \
             --max_new_tokens "${MMLU_MAX_NEW_TOKENS:-8}" \
-            --max_samples "${MMLU_MAX_SAMPLES:-0}"
+            --max_samples "${MMLU_MAX_SAMPLES:-0}" \
+            --safellava_pythonpath "${safellava_pythonpath}"
     fi
 }
 
@@ -378,6 +573,7 @@ eval_guardreasoner() {
 }
 
 if [[ "${STAGE}" == "prepare" ]]; then
+    preflight_prepare
     run_prepare
     exit 0
 fi
@@ -385,10 +581,10 @@ fi
 ensure_model_required
 
 case "${STAGE}" in
+    check)
+        run_preflight
+        ;;
     train)
-        if [[ "${PREPARE_FIRST}" == "1" ]]; then
-            run_prepare
-        fi
         case "${MODEL_TYPE}" in
             safegem) train_safegem ;;
             safellava) train_safellava ;;
@@ -416,16 +612,15 @@ case "${STAGE}" in
         esac
         ;;
     all)
-        if [[ "${PREPARE_FIRST}" == "1" ]]; then
-            run_prepare
-        fi
         case "${MODEL_TYPE}" in
             safegem)
+                run_prepare
                 train_safegem
                 MODEL_PATH="${LAST_OUTPUT_DIR}"
                 eval_safegem
                 ;;
             safellava)
+                run_prepare
                 train_safellava
                 MODEL_PATH="${LAST_OUTPUT_DIR}"
                 eval_safellava

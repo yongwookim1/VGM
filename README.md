@@ -97,6 +97,10 @@ Supported eval benchmarks:
 - `mmlu`
 - `all`
 
+Default benchmark:
+
+- `all` for `eval` and `all` stages
+
 Supported models:
 
 - `safegem`
@@ -119,6 +123,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash run_pipeline.sh --model safegem --stage train
 ```
 
+If `SafeGem-12B` already contains the tokenizer and image processor files, you can omit
+`PROCESSOR_NAME`. It will default to the same path as `MODEL_NAME`.
+
 ### Evaluate SafeGem
 
 ```bash
@@ -126,6 +133,11 @@ MODEL_PATH=./outputs/safegem-video-lora-YYYYMMDD_HHMMSS \
 BASE_MODEL=./models/SafeGem-12B \
 bash run_pipeline.sh --model safegem --stage eval
 ```
+
+This now runs both:
+
+- video safety evaluation
+- MMLU evaluation
 
 ### Evaluate SafeGem On MMLU
 
@@ -149,10 +161,12 @@ bash run_pipeline.sh --model safegem --stage all
 
 ```bash
 MODEL_NAME=./models/SafeLLaVA-7B \
-SAFELLAVA_PYTHONPATH=/path/to/SafeLLaVA/repo \
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash run_pipeline.sh --model safellava --stage all
 ```
+
+If the `safellava/` Python package lives inside `./models/SafeLLaVA-7B`, you can omit
+`SAFELLAVA_PYTHONPATH`. It now defaults to the same path as `MODEL_NAME` / `BASE_MODEL`.
 
 ### Evaluate SafeLLaVA On MMLU
 
@@ -178,4 +192,4 @@ bash run_pipeline.sh --model guardreasoner --stage eval
   reflect the vision-tower updates saved during training.
 - Old `training/` and `eval/` Python files remain as compatibility shims to the
   new `src/` modules.
-- If you want data prep before `train` or `all`, add `--prepare-first`.
+- `stage all` already includes data preparation before training.

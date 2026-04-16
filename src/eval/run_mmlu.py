@@ -7,6 +7,7 @@ import csv
 import json
 import logging
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -243,6 +244,9 @@ def extract_prediction_letter(text: str, num_choices: int) -> str | None:
 def load_model_and_tokenizer(args):
     from peft import PeftModel
 
+    if args.model_type == "safellava" and args.safellava_pythonpath:
+        sys.path.insert(0, args.safellava_pythonpath)
+
     tokenizer = AutoTokenizer.from_pretrained(args.base_model, trust_remote_code=True)
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -318,6 +322,7 @@ def main() -> None:
     parser.add_argument("--max_samples", type=int, default=0)
     parser.add_argument("--model_path", default="")
     parser.add_argument("--no_lora", action="store_true")
+    parser.add_argument("--safellava_pythonpath", default="")
     args = parser.parse_args()
 
     raw_records = load_mmlu_records(args.mmlu_path, args.split)

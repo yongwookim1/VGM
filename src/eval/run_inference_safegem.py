@@ -113,7 +113,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run SafeGem inference on the test set")
     parser.add_argument("--model_path", required=True)
     parser.add_argument("--base_model", default="models/SafeGem-12B")
-    parser.add_argument("--processor_name", default="models/gemma-3-12b-it")
+    parser.add_argument("--processor_name", default="models/SafeGem-12B")
     parser.add_argument("--test_data", required=True)
     parser.add_argument("--output_file", required=True)
     parser.add_argument("--device", default="cuda")
