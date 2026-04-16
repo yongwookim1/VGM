@@ -89,9 +89,10 @@ class VideoSafetyDataset(Dataset):
         }
         pixel_values = inputs.get("pixel_values")
         if pixel_values is not None:
+            # Gemma processors may return [1, T, C, H, W]; keep per-frame batches as 4D.
             result["pixel_values"] = (
                 pixel_values.squeeze(0)
-                if pixel_values.dim() > 3 and pixel_values.shape[0] == 1
+                if pixel_values.dim() == 5 and pixel_values.shape[0] == 1
                 else pixel_values
             )
         return result
