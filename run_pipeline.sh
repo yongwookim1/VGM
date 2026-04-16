@@ -12,6 +12,7 @@ Usage:
 Options:
   --model           safegem | safellava | guardreasoner
   --stage           prepare | train | eval | all
+  --benchmark       safety | mmlu | all (default: safety)
   --prepare-first   Run data preparation before train/all
   -h, --help        Show this message
 
@@ -19,6 +20,7 @@ Environment variables:
   VIDEOCHATGPT_DIR, SAFETYBENCH_DIR, SAFEWATCH_DIR, SAFEWATCH_MANIFEST
   MODEL_NAME, BASE_MODEL, MODEL_PATH, PROCESSOR_NAME
   SAFELLAVA_PYTHONPATH
+  MMLU_PATH, MMLU_SPLIT, MMLU_MAX_SAMPLES
   CUDA_VISIBLE_DEVICES, MASTER_PORT
   OUTPUT_DIR, RESULTS_DIR, TEST_DATA, DATA_PATH, OUTPUT_PATH
   NUM_TRAIN_EPOCHS, GLOBAL_BATCH_SIZE, PER_DEVICE_BS, LR, SAFETY_HEAD_LR
@@ -31,6 +33,7 @@ EOF
 
 MODEL_TYPE=""
 STAGE=""
+BENCHMARK="safety"
 PREPARE_FIRST=0
 
 while [[ $# -gt 0 ]]; do
@@ -41,6 +44,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --stage)
             STAGE="$2"
+            shift 2
+            ;;
+        --benchmark)
+            BENCHMARK="$2"
             shift 2
             ;;
         --prepare-first)
@@ -64,6 +71,15 @@ if [[ -z "${STAGE}" ]]; then
     usage >&2
     exit 1
 fi
+
+case "${BENCHMARK}" in
+    safety|mmlu|all) ;;
+    *)
+        echo "ERROR: unsupported benchmark '${BENCHMARK}'" >&2
+        usage >&2
+        exit 1
+        ;;
+esac
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
@@ -247,7 +263,7 @@ train_safellava() {
 
 eval_safegem() {
     local base_model="${BASE_MODEL:-${REPO_ROOT}/models/SafeGem-12B}"
-    local processor_name="${PROCESSOR_NAME:-${REPO_ROOT}/models/gemma-3-12b-it}"
+    local processor_name="${PROCESSOR_NAME:-${REPO_ROOT}/models/SafeGem-12B}"
     local model_path="${MODEL_PATH:-}"
     if [[ -z "${model_path}" ]]; then
         model_path="$(latest_checkpoint safegem-video-lora)"
@@ -259,19 +275,40 @@ eval_safegem() {
 
     local run_name
     run_name="$(basename "${model_path}")"
-    local predictions="${PREDICTIONS:-${RESULTS_DIR}/${run_name}_predictions.json}"
+    local benchmark="${BENCHMARK:-safety}"
 
-    python3 -m src.eval.run_inference_safegem \
-        --model_path "${model_path}" \
-        --base_model "${base_model}" \
-        --processor_name "${processor_name}" \
-        --test_data "${TEST_DATA}" \
-        --output_file "${predictions}" \
-        --max_frames "${MAX_FRAMES:-8}" \
-        --fps "${FPS:-1.0}" \
-        --max_new_tokens "${MAX_NEW_TOKENS:-512}"
+    if [[ "${benchmark}" == "safety" || "${benchmark}" == "all" ]]; then
+        local predictions="${PREDICTIONS:-${RESULTS_DIR}/${run_name}_predictions.json}"
 
-    python3 -m src.eval.eval_f1 "${predictions}"
+        python3 -m src.eval.run_inference_safegem \
+            --model_path "${model_path}" \
+            --base_model "${base_model}" \
+            --processor_name "${processor_name}" \
+            --test_data "${TEST_DATA}" \
+            --output_file "${predictions}" \
+            --max_frames "${MAX_FRAMES:-8}" \
+            --fps "${FPS:-1.0}" \
+            --max_new_tokens "${MAX_NEW_TOKENS:-512}"
+
+        python3 -m src.eval.eval_f1 "${predictions}"
+    fi
+
+    if [[ "${benchmark}" == "mmlu" || "${benchmark}" == "all" ]]; then
+        local mmlu_path="${MMLU_PATH:-${REPO_ROOT}/data/mmlu}"
+        local mmlu_predictions="${MMLU_PREDICTIONS:-${RESULTS_DIR}/${run_name}_mmlu_predictions.json}"
+        local mmlu_metrics="${MMLU_METRICS:-${RESULTS_DIR}/${run_name}_mmlu_metrics.json}"
+
+        python3 -m src.eval.run_mmlu \
+            --model_type safegem \
+            --model_path "${model_path}" \
+            --base_model "${base_model}" \
+            --mmlu_path "${mmlu_path}" \
+            --split "${MMLU_SPLIT:-test}" \
+            --output_file "${mmlu_predictions}" \
+            --metrics_file "${mmlu_metrics}" \
+            --max_new_tokens "${MMLU_MAX_NEW_TOKENS:-8}" \
+            --max_samples "${MMLU_MAX_SAMPLES:-0}"
+    fi
 }
 
 eval_safellava() {
@@ -287,19 +324,40 @@ eval_safellava() {
 
     local run_name
     run_name="$(basename "${model_path}")"
-    local predictions="${PREDICTIONS:-${RESULTS_DIR}/${run_name}_predictions.json}"
+    local benchmark="${BENCHMARK:-safety}"
 
-    python3 -m src.eval.run_inference_safellava \
-        --model_path "${model_path}" \
-        --base_model "${base_model}" \
-        --test_data "${TEST_DATA}" \
-        --output_file "${predictions}" \
-        --max_frames "${MAX_FRAMES:-8}" \
-        --fps "${FPS:-1.0}" \
-        --max_new_tokens "${MAX_NEW_TOKENS:-512}" \
-        --safellava_pythonpath "${SAFELLAVA_PYTHONPATH:-}"
+    if [[ "${benchmark}" == "safety" || "${benchmark}" == "all" ]]; then
+        local predictions="${PREDICTIONS:-${RESULTS_DIR}/${run_name}_predictions.json}"
 
-    python3 -m src.eval.eval_f1 "${predictions}"
+        python3 -m src.eval.run_inference_safellava \
+            --model_path "${model_path}" \
+            --base_model "${base_model}" \
+            --test_data "${TEST_DATA}" \
+            --output_file "${predictions}" \
+            --max_frames "${MAX_FRAMES:-8}" \
+            --fps "${FPS:-1.0}" \
+            --max_new_tokens "${MAX_NEW_TOKENS:-512}" \
+            --safellava_pythonpath "${SAFELLAVA_PYTHONPATH:-}"
+
+        python3 -m src.eval.eval_f1 "${predictions}"
+    fi
+
+    if [[ "${benchmark}" == "mmlu" || "${benchmark}" == "all" ]]; then
+        local mmlu_path="${MMLU_PATH:-${REPO_ROOT}/data/mmlu}"
+        local mmlu_predictions="${MMLU_PREDICTIONS:-${RESULTS_DIR}/${run_name}_mmlu_predictions.json}"
+        local mmlu_metrics="${MMLU_METRICS:-${RESULTS_DIR}/${run_name}_mmlu_metrics.json}"
+
+        python3 -m src.eval.run_mmlu \
+            --model_type safellava \
+            --model_path "${model_path}" \
+            --base_model "${base_model}" \
+            --mmlu_path "${mmlu_path}" \
+            --split "${MMLU_SPLIT:-test}" \
+            --output_file "${mmlu_predictions}" \
+            --metrics_file "${mmlu_metrics}" \
+            --max_new_tokens "${MMLU_MAX_NEW_TOKENS:-8}" \
+            --max_samples "${MMLU_MAX_SAMPLES:-0}"
+    fi
 }
 
 eval_guardreasoner() {
@@ -343,7 +401,13 @@ case "${STAGE}" in
         case "${MODEL_TYPE}" in
             safegem) eval_safegem ;;
             safellava) eval_safellava ;;
-            guardreasoner) eval_guardreasoner ;;
+            guardreasoner)
+                if [[ "${BENCHMARK}" != "safety" ]]; then
+                    echo "ERROR: guardreasoner only supports the safety benchmark" >&2
+                    exit 1
+                fi
+                eval_guardreasoner
+                ;;
             *)
                 echo "ERROR: unsupported model '${MODEL_TYPE}' for eval" >&2
                 exit 1

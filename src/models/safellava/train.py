@@ -64,8 +64,6 @@ class VideoSafetyTrainer(Trainer):
         safety_labels = inputs.pop("safety_labels", None)
         outputs = model(**inputs, do_safety=True, safety_labels=safety_labels)
         loss = outputs.loss
-        if getattr(outputs, "safety_loss", None) is not None and self.state.global_step % 10 == 0:
-            self.log({"safety_loss": outputs.safety_loss.item()})
         return (loss, outputs) if return_outputs else loss
 
     def create_optimizer(self):

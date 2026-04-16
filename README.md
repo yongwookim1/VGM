@@ -91,6 +91,12 @@ Supported stages:
 - `eval`
 - `all`
 
+Supported eval benchmarks:
+
+- `safety`
+- `mmlu`
+- `all`
+
 Supported models:
 
 - `safegem`
@@ -108,7 +114,7 @@ bash run_pipeline.sh --stage prepare
 
 ```bash
 MODEL_NAME=./models/SafeGem-12B \
-PROCESSOR_NAME=./models/gemma-3-12b-it \
+PROCESSOR_NAME=./models/SafeGem-12B \
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash run_pipeline.sh --model safegem --stage train
 ```
@@ -118,15 +124,23 @@ bash run_pipeline.sh --model safegem --stage train
 ```bash
 MODEL_PATH=./outputs/safegem-video-lora-YYYYMMDD_HHMMSS \
 BASE_MODEL=./models/SafeGem-12B \
-PROCESSOR_NAME=./models/gemma-3-12b-it \
 bash run_pipeline.sh --model safegem --stage eval
+```
+
+### Evaluate SafeGem On MMLU
+
+```bash
+MODEL_PATH=./outputs/safegem-video-lora-YYYYMMDD_HHMMSS \
+BASE_MODEL=./models/SafeGem-12B \
+MMLU_PATH=./data/mmlu \
+bash run_pipeline.sh --model safegem --stage eval --benchmark mmlu
 ```
 
 ### Train + Evaluate SafeGem
 
 ```bash
 MODEL_NAME=./models/SafeGem-12B \
-PROCESSOR_NAME=./models/gemma-3-12b-it \
+PROCESSOR_NAME=./models/SafeGem-12B \
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash run_pipeline.sh --model safegem --stage all
 ```
@@ -138,6 +152,15 @@ MODEL_NAME=./models/SafeLLaVA-7B \
 SAFELLAVA_PYTHONPATH=/path/to/SafeLLaVA/repo \
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash run_pipeline.sh --model safellava --stage all
+```
+
+### Evaluate SafeLLaVA On MMLU
+
+```bash
+MODEL_PATH=./outputs/safellava-video-lora-YYYYMMDD_HHMMSS \
+BASE_MODEL=./models/SafeLLaVA-7B \
+MMLU_PATH=./data/mmlu \
+bash run_pipeline.sh --model safellava --stage eval --benchmark mmlu
 ```
 
 ### Evaluate GuardReasoner

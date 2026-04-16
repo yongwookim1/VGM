@@ -54,6 +54,9 @@ class VideoSafetyDataset(Dataset):
             logger.warning("Error loading video %s: %s", sample["video_path"], exc)
             return None
 
+        if len(frames) < self.max_frames:
+            frames = frames + [frames[-1].copy() for _ in range(self.max_frames - len(frames))]
+
         user_content = [{"type": "image"} for _ in frames]
         user_content.append({"type": "text", "text": sample["question"]})
         messages = [

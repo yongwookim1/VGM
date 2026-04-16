@@ -45,7 +45,16 @@ class SafeGemVideoCollator:
         }
         pixel_values = [sample["pixel_values"] for sample in batch if "pixel_values" in sample]
         if pixel_values:
-            result["pixel_values"] = torch.cat(pixel_values, dim=0)
+            first = pixel_values[0]
+            if first.dim() == 4:
+                result["pixel_values"] = torch.stack(pixel_values, dim=0)
+            elif first.dim() == 5:
+                result["pixel_values"] = torch.cat(pixel_values, dim=0)
+            else:
+                raise ValueError(
+                    f"Unexpected SafeGem pixel_values rank: {first.dim()}. "
+                    "Expected 4D [frames, C, H, W] or 5D [batch, frames, C, H, W]."
+                )
         return result
 
 
