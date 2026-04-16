@@ -31,7 +31,7 @@ class DataArguments:
     data_path: str = field(default="data/processed/train_data.json")
     max_frames: int = field(default=8)
     fps: float = field(default=1.0)
-    max_length: int = field(default=8192)
+    max_length: int = field(default=2048)
 
 
 @dataclass
@@ -43,7 +43,7 @@ class LoRAArguments:
     lora_target_modules: str = field(
         default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
     )
-    safety_head_lr: Optional[float] = field(default=5e-5)
+    safety_head_lr: Optional[float] = field(default=1e-5)
 
 
 class VideoSafetyTrainer(Trainer):

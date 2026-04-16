@@ -454,18 +454,18 @@ train_safegem() {
         --data_path "${DATA_PATH}" \
         --max_frames "${MAX_FRAMES:-8}" \
         --fps "${FPS:-1.0}" \
-        --max_length "${MAX_LENGTH:-8192}" \
+        --max_length "${MAX_LENGTH:-2048}" \
         --use_lora True \
         --lora_r "${LORA_R:-64}" \
         --lora_alpha "${LORA_ALPHA:-64}" \
         --lora_dropout "${LORA_DROPOUT:-0.05}" \
         --lora_target_modules "${LORA_TARGET_MODULES:-q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj}" \
-        --safety_head_lr "${SAFETY_HEAD_LR:-5e-5}" \
+        --safety_head_lr "${SAFETY_HEAD_LR:-1e-5}" \
         --output_dir "${output_dir}" \
         --num_train_epochs "${epochs}" \
         --per_device_train_batch_size "${per_device_bs}" \
         --gradient_accumulation_steps "${grad_accum}" \
-        --learning_rate "${LR:-5e-5}" \
+        --learning_rate "${LR:-1e-5}" \
         --weight_decay "${WEIGHT_DECAY:-0.01}" \
         --warmup_ratio "${WARMUP_RATIO:-0.03}" \
         --lr_scheduler_type "${LR_SCHEDULER_TYPE:-cosine}" \

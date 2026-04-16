@@ -11,7 +11,11 @@ def sample_frames_from_video(
     max_frames: int = 8,
     fps: float = 1.0,
 ) -> list[Image.Image]:
-    """Uniformly sample frames from a video file using OpenCV."""
+    """Uniformly sample frames from a video file using OpenCV.
+
+    The sampled frame indices stay unchanged, but frames are decoded in
+    ascending order to avoid repeated random seeks on compressed videos.
+    """
     import cv2
 
     cap = cv2.VideoCapture(video_path)
@@ -30,24 +34,29 @@ def sample_frames_from_video(
         cap.release()
         raise ValueError(f"Video has no decodable frames: {video_path}")
 
-    indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+    indices = np.linspace(0, total_frames - 1, num_frames, dtype=int).tolist()
+    target_indices = sorted(dict.fromkeys(int(idx) for idx in indices))
 
-    frames = []
-    for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
-        ret, frame = cap.read()
-        if ret:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frames.append(Image.fromarray(frame_rgb))
-            continue
+    frames_by_index: dict[int, Image.Image] = {}
+    current_target_pos = 0
+    current_frame_idx = target_indices[0]
+    cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame_idx)
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(idx) - 1))
+    while current_target_pos < len(target_indices):
         ret, frame = cap.read()
-        if ret:
+        if not ret:
+            break
+
+        target_idx = target_indices[current_target_pos]
+        if current_frame_idx == target_idx:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frames.append(Image.fromarray(frame_rgb))
+            frames_by_index[target_idx] = Image.fromarray(frame_rgb)
+            current_target_pos += 1
+        current_frame_idx += 1
 
     cap.release()
+
+    frames = [frames_by_index[idx] for idx in indices if idx in frames_by_index]
 
     if not frames:
         raise ValueError(f"Could not read any frames from: {video_path}")
