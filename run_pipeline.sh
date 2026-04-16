@@ -208,6 +208,16 @@ has_prepare_inputs() {
     [[ -n "${VIDEOCHATGPT_DIR:-}" || -n "${SAFETYBENCH_DIR:-}" || -n "${SAFEWATCH_DIR:-}" || -n "${SAFEWATCH_MANIFEST:-}" ]]
 }
 
+maybe_prepare() {
+    if has_prepare_inputs; then
+        preflight_prepare
+        run_prepare
+    else
+        ensure_data_or_prepare_inputs "Training data" "${DATA_PATH}"
+        ensure_data_or_prepare_inputs "Test data" "${TEST_DATA}"
+    fi
+}
+
 ensure_data_or_prepare_inputs() {
     local label="$1"
     local file_path="$2"
@@ -843,28 +853,25 @@ case "${STAGE}" in
     all)
         case "${MODEL_TYPE}" in
             safegem)
-                preflight_prepare
                 preflight_train_safegem
                 preflight_eval_safegem
-                run_prepare
+                maybe_prepare
                 train_safegem
                 MODEL_PATH="${LAST_OUTPUT_DIR}"
                 eval_safegem
                 ;;
             safeqwen)
-                preflight_prepare
                 preflight_train_safeqwen
                 preflight_eval_safeqwen
-                run_prepare
+                maybe_prepare
                 train_safeqwen
                 MODEL_PATH="${LAST_OUTPUT_DIR}"
                 eval_safeqwen
                 ;;
             safellava)
-                preflight_prepare
                 preflight_train_safellava
                 preflight_eval_safellava
-                run_prepare
+                maybe_prepare
                 train_safellava
                 MODEL_PATH="${LAST_OUTPUT_DIR}"
                 eval_safellava
