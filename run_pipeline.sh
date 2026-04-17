@@ -21,6 +21,7 @@ Environment variables:
   VIDEOCHATGPT_DIR, SAFETYBENCH_DIR, SAFEWATCH_DIR, SAFEWATCH_MANIFEST
   MODEL_NAME, BASE_MODEL, MODEL_PATH, PROCESSOR_NAME
   SAFELLAVA_PYTHONPATH
+  SAFEQWEN_VIDEO_BACKEND
   MMLU_PATH, MMLU_SPLIT, MMLU_MAX_SAMPLES
   CUDA_VISIBLE_DEVICES, MASTER_PORT
   OUTPUT_DIR, RESULTS_DIR, TEST_DATA, DATA_PATH, OUTPUT_PATH
@@ -455,6 +456,7 @@ train_safegem() {
         --max_frames "${MAX_FRAMES:-8}" \
         --fps "${FPS:-1.0}" \
         --max_length "${MAX_LENGTH:-2048}" \
+        --video_backend "${SAFEQWEN_VIDEO_BACKEND:-legacy}" \
         --use_lora True \
         --lora_r "${LORA_R:-64}" \
         --lora_alpha "${LORA_ALPHA:-64}" \

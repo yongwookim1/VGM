@@ -7,7 +7,6 @@ import logging
 import math
 import os
 
-import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -41,6 +40,8 @@ def _resize_frame(img: Image.Image, max_pixels: int = _MAX_VIDEO_PIXELS) -> Imag
 
 def sample_frames_from_video(video_path: str, max_frames: int = 16, fps: float = 1.0) -> list[Image.Image]:
     """Uniformly sample an even number of frames from a video file."""
+    import cv2
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
@@ -78,6 +79,70 @@ def sample_frames_from_video(video_path: str, max_frames: int = 16, fps: float =
     return frames
 
 
+def sample_frames_from_video_standard(
+    video_path: str,
+    max_frames: int = 16,
+    fps: float = 1.0,
+) -> list[Image.Image]:
+    """Decode uniformly sampled frames with a sequential PyAV pass."""
+    try:
+        import av
+    except ImportError as exc:  # pragma: no cover - depends on runtime env
+        raise RuntimeError(
+            "The standard SafeQwen video loader requires PyAV. "
+            "Install 'av' or switch video_backend=legacy."
+        ) from exc
+
+    with av.open(video_path) as container:
+        stream = container.streams.video[0]
+        total_frames = stream.frames or 0
+        average_rate = stream.average_rate
+        video_fps = float(average_rate) if average_rate else 30.0
+        if video_fps <= 0:
+            video_fps = 30.0
+
+        if total_frames <= 0:
+            duration = stream.duration
+            if duration is not None and stream.time_base is not None:
+                duration_seconds = float(duration * stream.time_base)
+                total_frames = max(1, int(round(duration_seconds * video_fps)))
+
+        if total_frames <= 0:
+            decoded_frames = [
+                Image.fromarray(frame.to_ndarray(format="rgb24"))
+                for frame in container.decode(video=0)
+            ]
+            if not decoded_frames:
+                raise ValueError(f"Could not decode any frames from: {video_path}")
+            target_count = max(2, min(len(decoded_frames), max_frames))
+            target_count -= target_count % 2
+            if target_count <= 0:
+                target_count = min(len(decoded_frames), 2)
+            indices = np.linspace(0, len(decoded_frames) - 1, target_count, dtype=int)
+            return [decoded_frames[idx] for idx in indices]
+
+        duration_seconds = total_frames / video_fps
+        num_frames_by_fps = max(1, int(duration_seconds * fps))
+        target_count = min(num_frames_by_fps, max_frames)
+        target_count = max(2, target_count - (target_count % 2))
+
+        indices = set(np.linspace(0, total_frames - 1, target_count, dtype=int).tolist())
+        frames = []
+        for idx, frame in enumerate(container.decode(video=0)):
+            if idx in indices:
+                frames.append(Image.fromarray(frame.to_ndarray(format="rgb24")))
+            if len(frames) >= target_count:
+                break
+
+    if not frames:
+        raise ValueError(f"Could not read any frames from: {video_path}")
+    if len(frames) % 2 != 0:
+        frames = frames[:-1]
+    if not frames:
+        raise ValueError(f"Not enough frames after alignment: {video_path}")
+    return frames
+
+
 class VideoSafetyDataset(Dataset):
     """Dataset for SafeQwen2.5-VL video safety fine-tuning."""
 
@@ -89,7 +154,14 @@ class VideoSafetyDataset(Dataset):
         fps: float = 1.0,
         max_length: int = 2048,
         skip_missing_videos: bool = True,
+        video_backend: str = "legacy",
     ):
+        if video_backend not in {"legacy", "standard"}:
+            raise ValueError(
+                f"Unsupported SafeQwen video backend: {video_backend}. "
+                "Expected 'legacy' or 'standard'."
+            )
+
         with open(data_path) as f:
             self.data = json.load(f)
 
@@ -98,6 +170,7 @@ class VideoSafetyDataset(Dataset):
         self.fps = fps
         self.max_length = max_length
         self.skip_missing_videos = skip_missing_videos
+        self.video_backend = video_backend
 
         if skip_missing_videos:
             original_len = len(self.data)
@@ -120,7 +193,18 @@ class VideoSafetyDataset(Dataset):
         sample = self.data[idx]
 
         try:
-            frames = sample_frames_from_video(sample["video_path"], self.max_frames, self.fps)
+            if self.video_backend == "standard":
+                frames = sample_frames_from_video_standard(
+                    sample["video_path"],
+                    self.max_frames,
+                    self.fps,
+                )
+            else:
+                frames = sample_frames_from_video(
+                    sample["video_path"],
+                    self.max_frames,
+                    self.fps,
+                )
         except Exception as exc:
             logger.warning("Error loading video %s: %s", sample["video_path"], exc)
             return None

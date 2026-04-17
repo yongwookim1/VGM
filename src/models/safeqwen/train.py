@@ -30,6 +30,10 @@ class DataArguments:
     max_frames: int = field(default=8)
     fps: float = field(default=1.0)
     max_length: int = field(default=2048)
+    video_backend: str = field(
+        default="legacy",
+        metadata={"help": "SafeQwen video loader backend: legacy or standard."},
+    )
 
 
 @dataclass
@@ -187,6 +191,7 @@ def main() -> None:
         max_frames=data_args.max_frames,
         fps=data_args.fps,
         max_length=data_args.max_length,
+        video_backend=data_args.video_backend,
     )
     collator = VideoSafetyCollator(
         pad_token_id=processor.tokenizer.pad_token_id or 151643,
