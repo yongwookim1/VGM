@@ -442,6 +442,7 @@ train_safegem() {
     export PYTHONUNBUFFERED=1
     export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
     export NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-1}"
+    export NCCL_SHM_DISABLE="${NCCL_SHM_DISABLE:-1}"
     export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 
     torchrun \
@@ -507,6 +508,7 @@ train_safeqwen() {
     export PYTHONUNBUFFERED=1
     export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
     export NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-1}"
+    export NCCL_SHM_DISABLE="${NCCL_SHM_DISABLE:-1}"
     export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 
     torchrun \
@@ -578,6 +580,7 @@ train_safellava() {
     export PYTHONUNBUFFERED=1
     export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
     export NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-1}"
+    export NCCL_SHM_DISABLE="${NCCL_SHM_DISABLE:-1}"
     export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 
     torchrun \
